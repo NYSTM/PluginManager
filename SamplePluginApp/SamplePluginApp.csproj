@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <Authors>NYSTM</Authors>
+    <Copyright>Copyright (c) 2026 NYSTM</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PluginManager.Core\PluginManager.Core.csproj" />
+    <ProjectReference Include="..\PluginManager\PluginManager.csproj" />
+  </ItemGroup>
+
+  <!-- pluginsettings.json を出力ディレクトリにコピー -->
+  <ItemGroup>
+    <Content Include="..\PluginManager\pluginsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>pluginsettings.json</Link>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\LICENSE">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+    <None Include="..\README.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <!-- SamplePlugin.dll をビルド後に plugins/ フォルダへコピー -->
+  <Target Name="CopySamplePlugin" AfterTargets="Build">
+    <MakeDir Directories="$(OutputPath)plugins" />
+    <Copy SourceFiles="..\SamplePlugin\bin\$(Configuration)\net8.0-windows\SamplePlugin.dll" DestinationFolder="$(OutputPath)plugins" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

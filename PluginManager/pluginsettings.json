@@ -1,0 +1,27 @@
+{
+  "PluginsPath": "plugins",
+  "IntervalMilliseconds": 500,
+  "TimeoutMilliseconds": 5000,
+  "RetryCount": 3,
+  "RetryDelayMilliseconds": 500,
+  "StageOrders": [
+    {
+      "Stage": "PreProcessing",
+      "PluginOrder": [
+        { "Id": "sample-plugin-a", "Order": 1 }
+      ]
+    },
+    {
+      "Stage": "Processing",
+      "PluginOrder": [
+        { "Id": "sample-plugin-c", "Order": 1 }
+      ]
+    },
+    {
+      "Stage": "PostProcessing",
+      "PluginOrder": [
+        { "Id": "sample-plugin-b", "Order": 1 }
+      ]
+    }
+  ]
+}
