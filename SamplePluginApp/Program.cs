@@ -1,4 +1,4 @@
-namespace SamplePluginApp;
+﻿namespace SamplePluginApp;
 
 internal static class Program
 {

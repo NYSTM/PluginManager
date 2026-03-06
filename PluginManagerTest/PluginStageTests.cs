@@ -1,10 +1,10 @@
-using PluginManager;
+ï»¿using PluginManager;
 using Xunit;
 
 namespace PluginManagerTest;
 
 /// <summary>
-/// PluginStage ‚Ìƒ†ƒjƒbƒgƒeƒXƒg
+/// PluginStage ã®ãƒ¦ãƒ‹ãƒƒãƒˆãƒ†ã‚¹ãƒˆ
 /// </summary>
 public sealed class PluginStageTests
 {
@@ -34,7 +34,7 @@ public sealed class PluginStageTests
     [Fact]
     public void Equals_DifferentCase_ReturnsTrue()
     {
-        // Id ‚Ì”äŠr‚Í‘å•¶š¬•¶š‚ğ‹æ•Ê‚µ‚È‚¢
+        // Id ã®æ¯”è¼ƒã¯å¤§æ–‡å­—å°æ–‡å­—ã‚’åŒºåˆ¥ã—ãªã„
         var a = new PluginStage("processing");
         var b = new PluginStage("PROCESSING");
         Assert.Equal(a, b);
@@ -104,14 +104,14 @@ public sealed class PluginStageTests
     {
         var stage = new PluginStage("Processing");
         Assert.True(stage.Equals((object)new PluginStage("processing")));
-        Assert.False(stage.Equals("Processing")); // ˆÙ‚È‚éŒ^
+        Assert.False(stage.Equals("Processing")); // ç•°ãªã‚‹å‹
         Assert.False(stage.Equals(null));
     }
 
     [Fact]
     public void UsedAsHashSetKey_CaseInsensitiveLookup()
     {
-        // HashSet ‚Å‚Ì‘å•¶š¬•¶š‚ğ‹æ•Ê‚µ‚È‚¢“®ì
+        // HashSet ã§ã®å¤§æ–‡å­—å°æ–‡å­—ã‚’åŒºåˆ¥ã—ãªã„å‹•ä½œ
         var set = new HashSet<PluginStage> { new("Processing") };
         Assert.Contains(new PluginStage("processing"), set);
     }
