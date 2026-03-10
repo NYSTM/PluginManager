@@ -72,7 +72,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        PublishEvent(PluginLoaderEventType.LoadStart, "設定ファイルを使用したプラグインロードを開始します。",
+        PublishNotification(PluginLoaderNotificationType.LoadStart, "設定ファイルを使用したプラグインロードを開始します。",
             configurationFilePath: configurationFilePath);
 
         var config = PluginConfigurationLoader.Load(configurationFilePath);
@@ -97,7 +97,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
             results.AddRange(await Task.WhenAll(tasks));
         }
 
-        PublishEvent(PluginLoaderEventType.LoadCompleted, "設定ファイルを使用したプラグインロードが完了しました。",
+        PublishNotification(PluginLoaderNotificationType.LoadCompleted, "設定ファイルを使用したプラグインロードが完了しました。",
             configurationFilePath: configurationFilePath);
 
         return results;
@@ -156,7 +156,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         PluginContext context,
         CancellationToken cancellationToken = default)
     {
-        PublishEvent(PluginLoaderEventType.ExecuteStart, "プラグイン実行を開始します。", stageId: stage.Id);
+        PublishNotification(PluginLoaderNotificationType.ExecuteStart, "プラグイン実行を開始します。", stageId: stage.Id);
         var task = PluginExecutor.ExecutePluginsAndWaitAsync(loadResults, stage, context, cancellationToken);
         return CompleteExecuteAsync(task, stage.Id);
     }
@@ -329,9 +329,31 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
             retryCount: retryCount,
             retryDelayMilliseconds: retryDelayMilliseconds,
             cancellationToken: cancellationToken,
-            onStart: attempt => { },
-            onSuccess: (attempt, _) => { },
-            onRetry: (attempt, result) => { },
+            onStart: attempt =>
+            {
+                PublishNotification(
+                    PluginLoaderNotificationType.PluginLoadStart,
+                    $"プラグイン '{descriptor.Id}' のロードを開始します。",
+                    pluginId: descriptor.Id,
+                    attempt: attempt);
+            },
+            onSuccess: (attempt, _) =>
+            {
+                PublishNotification(
+                    PluginLoaderNotificationType.PluginLoadSuccess,
+                    $"プラグイン '{descriptor.Id}' のロードに成功しました。",
+                    pluginId: descriptor.Id,
+                    attempt: attempt);
+            },
+            onRetry: (attempt, result) =>
+            {
+                PublishNotification(
+                    PluginLoaderNotificationType.PluginLoadRetry,
+                    $"プラグイン '{descriptor.Id}' のロードをリトライします。",
+                    pluginId: descriptor.Id,
+                    attempt: attempt,
+                    exception: result.Error);
+            },
             onFailed: (attempt, result) =>
             {
                 var reason = cancellationToken.IsCancellationRequested
@@ -339,6 +361,13 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
                     : result.Error is InvalidOperationException
                         ? "恒久的エラーによりプラグインロードに失敗しました。"
                         : "リトライ上限に到達しプラグインロードに失敗しました。";
+
+                PublishNotification(
+                    PluginLoaderNotificationType.PluginLoadFailed,
+                    $"プラグイン '{descriptor.Id}' のロードに失敗しました。理由: {reason}",
+                    pluginId: descriptor.Id,
+                    attempt: attempt,
+                    exception: result.Error);
             });
     }
 
@@ -372,16 +401,16 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         try
         {
             var result = await executeTask;
-            PublishEvent(PluginLoaderEventType.ExecuteCompleted, "プラグイン実行が完了しました。", stageId: stageId);
+            PublishNotification(PluginLoaderNotificationType.ExecuteCompleted, "プラグイン実行が完了しました。", stageId: stageId);
             return result;
         }
         catch (Exception ex)
         {
-            PublishEvent(PluginLoaderEventType.ExecuteFailed, "プラグイン実行中にエラーが発生しました。", stageId: stageId, exception: ex);
+            PublishNotification(PluginLoaderNotificationType.ExecuteFailed, "プラグイン実行中にエラーが発生しました。", stageId: stageId, exception: ex);
             throw;
         }
     }
 
-    private void PublishEvent(PluginLoaderEventType eventType, string message, string? pluginId = null, string? stageId = null, int? attempt = null, string? configurationFilePath = null, Exception? exception = null)
-        => _notificationPublisher.Publish(eventType, message, pluginId, stageId, attempt, configurationFilePath, exception);
+    private void PublishNotification(PluginLoaderNotificationType notificationType, string message, string? pluginId = null, string? stageId = null, int? attempt = null, string? configurationFilePath = null, Exception? exception = null)
+        => _notificationPublisher.Publish(notificationType, message, pluginId, stageId, attempt, configurationFilePath, exception);
 }

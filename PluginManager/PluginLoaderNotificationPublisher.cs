@@ -17,7 +17,7 @@ internal sealed class PluginLoaderNotificationPublisher(ILogger<PluginLoader>? l
         => _callback = callback;
 
     public void Publish(
-        PluginLoaderEventType eventType,
+        PluginLoaderNotificationType notificationType,
         string message,
         string? pluginId = null,
         string? stageId = null,
@@ -26,7 +26,7 @@ internal sealed class PluginLoaderNotificationPublisher(ILogger<PluginLoader>? l
         Exception? exception = null)
     {
         // コールバックに通知
-        InvokeCallback(eventType, pluginId, stageId, attempt, configurationFilePath, exception);
+        InvokeCallback(notificationType, pluginId, stageId, attempt, configurationFilePath, exception);
 
         // ロガーに出力
         if (_logger is null)
@@ -35,18 +35,18 @@ internal sealed class PluginLoaderNotificationPublisher(ILogger<PluginLoader>? l
         if (exception is not null)
         {
             _logger.LogError(exception,
-                "{Message} EventType={EventType}, PluginId={PluginId}, StageId={StageId}, Attempt={Attempt}, ConfigPath={ConfigPath}",
-                message, eventType, pluginId, stageId, attempt, configurationFilePath);
+                "{Message} NotificationType={NotificationType}, PluginId={PluginId}, StageId={StageId}, Attempt={Attempt}, ConfigPath={ConfigPath}",
+                message, notificationType, pluginId, stageId, attempt, configurationFilePath);
             return;
         }
 
         _logger.LogInformation(
-            "{Message} EventType={EventType}, PluginId={PluginId}, StageId={StageId}, Attempt={Attempt}, ConfigPath={ConfigPath}",
-            message, eventType, pluginId, stageId, attempt, configurationFilePath);
+            "{Message} NotificationType={NotificationType}, PluginId={PluginId}, StageId={StageId}, Attempt={Attempt}, ConfigPath={ConfigPath}",
+            message, notificationType, pluginId, stageId, attempt, configurationFilePath);
     }
 
     private void InvokeCallback(
-        PluginLoaderEventType eventType,
+        PluginLoaderNotificationType notificationType,
         string? pluginId,
         string? stageId,
         int? attempt,
@@ -58,49 +58,49 @@ internal sealed class PluginLoaderNotificationPublisher(ILogger<PluginLoader>? l
 
         try
         {
-            switch (eventType)
+            switch (notificationType)
             {
-                case PluginLoaderEventType.LoadStart:
+                case PluginLoaderNotificationType.LoadStart:
                     if (configurationFilePath is not null)
                         _callback.OnLoadStart(configurationFilePath);
                     break;
 
-                case PluginLoaderEventType.LoadCompleted:
+                case PluginLoaderNotificationType.LoadCompleted:
                     if (configurationFilePath is not null)
                         _callback.OnLoadCompleted(configurationFilePath);
                     break;
 
-                case PluginLoaderEventType.PluginLoadStart:
+                case PluginLoaderNotificationType.PluginLoadStart:
                     if (pluginId is not null && attempt.HasValue)
                         _callback.OnPluginLoadStart(pluginId, attempt.Value);
                     break;
 
-                case PluginLoaderEventType.PluginLoadRetry:
+                case PluginLoaderNotificationType.PluginLoadRetry:
                     if (pluginId is not null && attempt.HasValue)
                         _callback.OnPluginLoadRetry(pluginId, attempt.Value, exception);
                     break;
 
-                case PluginLoaderEventType.PluginLoadSuccess:
+                case PluginLoaderNotificationType.PluginLoadSuccess:
                     if (pluginId is not null && attempt.HasValue)
                         _callback.OnPluginLoadSuccess(pluginId, attempt.Value);
                     break;
 
-                case PluginLoaderEventType.PluginLoadFailed:
+                case PluginLoaderNotificationType.PluginLoadFailed:
                     if (pluginId is not null && attempt.HasValue)
                         _callback.OnPluginLoadFailed(pluginId, attempt.Value, exception);
                     break;
 
-                case PluginLoaderEventType.ExecuteStart:
+                case PluginLoaderNotificationType.ExecuteStart:
                     if (stageId is not null)
                         _callback.OnExecuteStart(stageId);
                     break;
 
-                case PluginLoaderEventType.ExecuteCompleted:
+                case PluginLoaderNotificationType.ExecuteCompleted:
                     if (stageId is not null)
                         _callback.OnExecuteCompleted(stageId);
                     break;
 
-                case PluginLoaderEventType.ExecuteFailed:
+                case PluginLoaderNotificationType.ExecuteFailed:
                     if (stageId is not null && exception is not null)
                         _callback.OnExecuteFailed(stageId, exception);
                     break;
