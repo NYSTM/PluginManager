@@ -303,7 +303,7 @@ public sealed class PluginContextTests
     }
 
     /// <summary>
-    /// RemoveProperty はキー大文字小文字を区別しないことを確認します。
+    /// RemoveProperty で大文字小文字を区別しないことを確認します。
     /// </summary>
     [Fact]
     public void RemoveProperty_CaseInsensitiveKey_RemovesEntry()
@@ -318,5 +318,203 @@ public sealed class PluginContextTests
         // Assert
         Assert.True(result);
         Assert.False(context.Properties.ContainsKey("MyKey"));
+    }
+
+    // ──────────────────────────────────────────────
+    // TryGetProperty のテスト
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// TryGetProperty で存在するキーの値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_ExistingKey_ReturnsTrueAndValue()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("count", 42);
+
+        // Act
+        var result = context.TryGetProperty<int>("count", out var value);
+
+        // Assert
+        Assert.True(result);
+        Assert.Equal(42, value);
+    }
+
+    /// <summary>
+    /// TryGetProperty で存在しないキーは false を返すことを確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_NonExistentKey_ReturnsFalse()
+    {
+        // Arrange
+        var context = new PluginContext();
+
+        // Act
+        var result = context.TryGetProperty<int>("count", out var value);
+
+        // Assert
+        Assert.False(result);
+        Assert.Equal(0, value);  // default(int)
+    }
+
+    /// <summary>
+    /// TryGetProperty で型が不一致の場合は false を返すことを確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_TypeMismatch_ReturnsFalse()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("value", "abc");  // string を格納
+
+        // Act
+        var result = context.TryGetProperty<int>("value", out var value);  // int として取得
+
+        // Assert
+        Assert.False(result);
+        Assert.Equal(0, value);  // default(int)
+    }
+
+    /// <summary>
+    /// TryGetProperty で null 値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_NullValue_ReturnsTrueAndNull()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("data", null);
+
+        // Act
+        var result = context.TryGetProperty<string>("data", out var value);
+
+        // Assert
+        Assert.True(result);  // キーは存在する
+        Assert.Null(value);
+    }
+
+    // ──────────────────────────────────────────────
+    // GetPropertyOrDefault のテスト
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// GetPropertyOrDefault で存在するキーの値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrDefault_ExistingKey_ReturnsValue()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("count", 42);
+
+        // Act
+        var value = context.GetPropertyOrDefault("count", 100);
+
+        // Assert
+        Assert.Equal(42, value);
+    }
+
+    /// <summary>
+    /// GetPropertyOrDefault で存在しないキーはデフォルト値を返すことを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrDefault_NonExistentKey_ReturnsDefault()
+    {
+        // Arrange
+        var context = new PluginContext();
+
+        // Act
+        var value = context.GetPropertyOrDefault("count", 100);
+
+        // Assert
+        Assert.Equal(100, value);
+    }
+
+    /// <summary>
+    /// GetPropertyOrDefault で型が不一致の場合はデフォルト値を返すことを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrDefault_TypeMismatch_ReturnsDefault()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("value", "abc");
+
+        // Act
+        var value = context.GetPropertyOrDefault("value", 999);
+
+        // Assert
+        Assert.Equal(999, value);
+    }
+
+    // ──────────────────────────────────────────────
+    // GetPropertyOrThrow のテスト
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// GetPropertyOrThrow で存在するキーの値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrThrow_ExistingKey_ReturnsValue()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("count", 42);
+
+        // Act
+        var value = context.GetPropertyOrThrow<int>("count");
+
+        // Assert
+        Assert.Equal(42, value);
+    }
+
+    /// <summary>
+    /// GetPropertyOrThrow で存在しないキーは KeyNotFoundException をスローすることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrThrow_NonExistentKey_ThrowsKeyNotFoundException()
+    {
+        // Arrange
+        var context = new PluginContext();
+
+        // Act & Assert
+        var ex = Assert.Throws<KeyNotFoundException>(() => context.GetPropertyOrThrow<int>("count"));
+        Assert.Contains("count", ex.Message);
+    }
+
+    /// <summary>
+    /// GetPropertyOrThrow で型が不一致の場合は InvalidCastException をスローすることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrThrow_TypeMismatch_ThrowsInvalidCastException()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("value", "abc");
+
+        // Act & Assert
+        var ex = Assert.Throws<InvalidCastException>(() => context.GetPropertyOrThrow<int>("value"));
+        Assert.Contains("value", ex.Message);
+        Assert.Contains("String", ex.Message);
+        Assert.Contains("Int32", ex.Message);
+    }
+
+    /// <summary>
+    /// GetPropertyOrThrow で null 値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrThrow_NullValue_ReturnsNull()
+    {
+        // Arrange
+        var context = new PluginContext();
+        context.SetProperty("data", null);
+
+        // Act
+        var value = context.GetPropertyOrThrow<string>("data");
+
+        // Assert
+        Assert.Null(value);
     }
 }

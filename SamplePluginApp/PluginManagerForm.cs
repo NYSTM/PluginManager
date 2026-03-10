@@ -73,10 +73,11 @@ public partial class PluginManagerForm : Form
             _loader = new PluginLoader();
             _loadResults = [];
 
+            // コールバック方式で通知を受け取る（イベントハンドラより直感的）
+            _loader.SetCallback(new SimplePluginCallback(AppendLog));
+
             // ロードのたびに実行コンテキストをリセット
             _executionContext = new PluginContext();
-
-            AppendLog($"設定ファイル: {configPath}");
 
             _loadResults = await _loader.LoadFromConfigurationAsync(configPath, _executionContext);
 
@@ -84,10 +85,10 @@ public partial class PluginManagerForm : Form
             foreach (var r in _loadResults)
             {
                 if (r.Success)
-                    AppendLog($"  ? {r.Descriptor.Id}  v{r.Descriptor.Version}  " +
+                    AppendLog($"  ├─ {r.Descriptor.Id}  v{r.Descriptor.Version}  " +
                               $"[{string.Join(", ", r.Descriptor.SupportedStages.Select(s => s.Id))}]", LogLevel.Success);
                 else
-                    AppendLog($"  ? {r.Descriptor.Id}  {r.Error?.Message}", LogLevel.Error);
+                    AppendLog($"  └─ {r.Descriptor.Id}  {r.Error?.Message}", LogLevel.Error);
             }
 
             var hasPlugin = _loadResults.Any(r => r.Success);
@@ -217,8 +218,6 @@ public partial class PluginManagerForm : Form
     // ──────────────────────────────────────────────
     // ログ出力
     // ──────────────────────────────────────────────
-
-    private enum LogLevel { Info, Success, Warn, Error }
 
     private void AppendLog(string message, LogLevel level = LogLevel.Info)
     {

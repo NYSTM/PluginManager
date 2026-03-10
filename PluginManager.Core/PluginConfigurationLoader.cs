@@ -69,6 +69,9 @@ public static class PluginConfigurationLoader
             if (stageOrder.PluginOrder is null)
                 throw new InvalidOperationException($"StageOrders[{i}].PluginOrder は必須です。");
 
+            // ステージ内でのプラグイン ID の重複をチェック
+            var pluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             for (int j = 0; j < stageOrder.PluginOrder.Count; j++)
             {
                 var entry = stageOrder.PluginOrder[j];
@@ -77,6 +80,11 @@ public static class PluginConfigurationLoader
 
                 if (entry.Order < 0)
                     throw new InvalidOperationException($"StageOrders[{i}].PluginOrder[{j}].Order は 0 以上で指定してください。");
+
+                // 重複チェック
+                if (!pluginIds.Add(entry.Id))
+                    throw new InvalidOperationException(
+                        $"プラグイン ID '{entry.Id}' がステージ '{stageOrder.Stage}' 内で重複しています。");
             }
         }
     }

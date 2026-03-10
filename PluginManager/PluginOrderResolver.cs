@@ -70,11 +70,12 @@ internal static class PluginOrderResolver
     /// <summary>
     /// ステージ順序設定から「プラグインID → (ステージセット, Order)」の高速ルックアップを構築します。
     /// 同一プラグイン ID が複数ステージに登録された場合、すべてのステージを集約します。
+    /// 戻り値は <see cref="FrozenDictionary{TKey, TValue}"/> で不変かつ高速な読み取りを保証します。
     /// </summary>
-    private static Dictionary<string, (IReadOnlySet<PluginStage> Stages, int Order)> BuildStageLookup(
+    private static FrozenDictionary<string, (IReadOnlySet<PluginStage> Stages, int Order)> BuildStageLookup(
         IReadOnlyList<PluginStageOrderEntry> stageOrders)
     {
-        // 中間バッファ: ステージを List で蓄積し、最後に FrozenSet に変換する
+        // 中間バッファ: ステージを List で蓄積
         var buffer = new Dictionary<string, (List<PluginStage> Stages, int Order)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var stageEntry in stageOrders)
@@ -95,12 +96,11 @@ internal static class PluginOrderResolver
             }
         }
 
-        // バッファを最終型へ変換（中間 ToDictionary コピーを排除）
-        var result = new Dictionary<string, (IReadOnlySet<PluginStage>, int)>(buffer.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var kv in buffer)
-            result[kv.Key] = (kv.Value.Stages.ToFrozenSet(), kv.Value.Order);
-
-        return result;
+        // FrozenDictionary に変換（読み取り専用かつ高速なルックアップ）
+        return buffer.ToFrozenDictionary(
+            kv => kv.Key,
+            kv => ((IReadOnlySet<PluginStage>)kv.Value.Stages.ToFrozenSet(), kv.Value.Order),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -109,7 +109,7 @@ internal static class PluginOrderResolver
     /// </summary>
     private static (IReadOnlySet<PluginStage>? Stages, int Order) ResolveStagedOrder(
         PluginDescriptor descriptor,
-        Dictionary<string, (IReadOnlySet<PluginStage> Stages, int Order)> stageLookup)
+        FrozenDictionary<string, (IReadOnlySet<PluginStage> Stages, int Order)> stageLookup)
         => stageLookup.TryGetValue(descriptor.Id, out var value)
             ? (value.Stages, value.Order)
             : (null, int.MaxValue);

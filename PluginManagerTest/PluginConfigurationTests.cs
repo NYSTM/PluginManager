@@ -395,4 +395,86 @@ public sealed class PluginConfigurationTests
             File.Delete(tempFile);
         }
     }
+
+    /// <summary>
+    /// 設定ファイル内でプラグイン ID が重複している場合に例外がスローされることを確認します。
+    /// </summary>
+    [Fact]
+    public void Load_DuplicatePluginId_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var tempFile = Path.GetTempFileName();
+        var json = """
+        {
+          "PluginsPath": "test-plugins",
+          "StageOrders": [
+            {
+              "Stage": "Processing",
+              "PluginOrder": [
+                { "Id": "plugin-a", "Order": 1 },
+                { "Id": "plugin-b", "Order": 2 },
+                { "Id": "plugin-a", "Order": 3 }
+              ]
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(tempFile, json);
+
+        try
+        {
+            // Act & Assert
+            var ex = Assert.Throws<InvalidOperationException>(() => PluginConfiguration.Load(tempFile));
+            Assert.Contains("plugin-a", ex.Message);
+            Assert.Contains("重複", ex.Message);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    /// <summary>
+    /// 異なるステージ間で同じプラグイン ID を使用できることを確認します。
+    /// </summary>
+    [Fact]
+    public void Load_SameIdInDifferentStages_Success()
+    {
+        // Arrange
+        var tempFile = Path.GetTempFileName();
+        var json = """
+        {
+          "PluginsPath": "test-plugins",
+          "StageOrders": [
+            {
+              "Stage": "PreProcessing",
+              "PluginOrder": [
+                { "Id": "common-plugin", "Order": 1 }
+              ]
+            },
+            {
+              "Stage": "Processing",
+              "PluginOrder": [
+                { "Id": "common-plugin", "Order": 1 }
+              ]
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(tempFile, json);
+
+        try
+        {
+            // Act
+            var config = PluginConfiguration.Load(tempFile);
+
+            // Assert
+            Assert.NotNull(config);
+            Assert.Equal(2, config.StageOrders.Count);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
 }

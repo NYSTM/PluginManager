@@ -19,6 +19,10 @@ using PluginManager;
 /// 呼び出し元が <see cref="PluginLoadResult"/> のリストへの参照を手放す必要があります。
 /// <see cref="IPlugin"/> インスタンスへの強参照が残っている限り、ALC は GC されません。
 /// </para>
+/// <para>
+/// <b>通知方式</b><br/>
+/// ライフサイクル通知を受け取るには <see cref="SetCallback"/> でコールバックを設定してください。
+/// </para>
 /// </remarks>
 public sealed class PluginLoader : IDisposable, IAsyncDisposable
 {
@@ -28,13 +32,31 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     private readonly PluginLoaderNotificationPublisher _notificationPublisher;
     private bool _disposed;
 
-    public event EventHandler<PluginLoaderEventArgs>? PluginEvent;
-
     public PluginLoader(ILogger<PluginLoader>? logger = null)
     {
         _notificationPublisher = new(logger);
         _discoverer = new(logger);
     }
+
+    /// <summary>
+    /// ライフサイクル通知を受け取るコールバックを設定します。
+    /// </summary>
+    /// <param name="callback">通知を受け取るコールバック実装。<see langword="null"/> で解除。</param>
+    /// <example>
+    /// <code>
+    /// public class MyCallback : IPluginLoaderCallback
+    /// {
+    ///     public void OnPluginLoadSuccess(string pluginId, int attempt)
+    ///         => Console.WriteLine($"[OK] {pluginId}");
+    /// }
+    /// 
+    /// var loader = new PluginLoader();
+    /// loader.SetCallback(new MyCallback());
+    /// await loader.LoadFromConfigurationAsync(...);
+    /// </code>
+    /// </example>
+    public void SetCallback(IPluginLoaderCallback? callback)
+        => _notificationPublisher.SetCallback(callback);
 
     public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(string configurationFilePath, string searchPattern = "*.dll")
         => _discoverer.DiscoverFromConfiguration(configurationFilePath, searchPattern);
@@ -299,44 +321,25 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         int retryDelayMilliseconds,
         CancellationToken cancellationToken)
     {
-        PluginLoadResult result = default!;
-        for (int attempt = 0; attempt <= retryCount; attempt++)
-        {
-            if (attempt == 0)
-                PublishEvent(PluginLoaderEventType.PluginLoadStart, "プラグインロードを開始します。", descriptor.Id, attempt: attempt + 1);
-
-            result = await LoadPluginWithTimeoutAsync(descriptor, context, timeoutMilliseconds, cancellationToken);
-
-            if (result.Success)
+        return await RetryHelper.ExecuteWithRetryAsync(
+            operation: async ct => await LoadPluginWithTimeoutAsync(descriptor, context, timeoutMilliseconds, ct),
+            isSuccess: r => r.Success,
+            isPermanentError: r => r.Error is InvalidOperationException,
+            timeoutMilliseconds: 0, // タイムアウトは LoadPluginWithTimeoutAsync 内で処理済み
+            retryCount: retryCount,
+            retryDelayMilliseconds: retryDelayMilliseconds,
+            cancellationToken: cancellationToken,
+            onStart: attempt => { },
+            onSuccess: (attempt, _) => { },
+            onRetry: (attempt, result) => { },
+            onFailed: (attempt, result) =>
             {
-                PublishEvent(PluginLoaderEventType.PluginLoadSuccess, "プラグインロードに成功しました。", descriptor.Id, attempt: attempt + 1);
-                return result;
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                PublishEvent(PluginLoaderEventType.PluginLoadFailed, "キャンセルによりプラグインロードを中断しました。", descriptor.Id, attempt: attempt + 1, exception: result.Error);
-                return result;
-            }
-
-            if (result.Error is InvalidOperationException)
-            {
-                PublishEvent(PluginLoaderEventType.PluginLoadFailed, "恒久的エラーによりプラグインロードに失敗しました。", descriptor.Id, attempt: attempt + 1, exception: result.Error);
-                return result;
-            }
-
-            if (attempt < retryCount)
-            {
-                PublishEvent(PluginLoaderEventType.PluginLoadRetry, "プラグインロードをリトライします。", descriptor.Id, attempt: attempt + 1, exception: result.Error);
-                try { await Task.Delay(retryDelayMilliseconds, cancellationToken); }
-                catch (OperationCanceledException) { }
-                continue;
-            }
-
-            PublishEvent(PluginLoaderEventType.PluginLoadFailed, "リトライ上限に到達しプラグインロードに失敗しました。", descriptor.Id, attempt: attempt + 1, exception: result.Error);
-        }
-
-        return result;
+                var reason = cancellationToken.IsCancellationRequested
+                    ? "キャンセルによりプラグインロードを中断しました。"
+                    : result.Error is InvalidOperationException
+                        ? "恒久的エラーによりプラグインロードに失敗しました。"
+                        : "リトライ上限に到達しプラグインロードに失敗しました。";
+            });
     }
 
     private async Task<PluginLoadResult> LoadPluginWithTimeoutAsync(
@@ -380,5 +383,5 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     }
 
     private void PublishEvent(PluginLoaderEventType eventType, string message, string? pluginId = null, string? stageId = null, int? attempt = null, string? configurationFilePath = null, Exception? exception = null)
-        => _notificationPublisher.Publish(this, PluginEvent, eventType, message, pluginId, stageId, attempt, configurationFilePath, exception);
+        => _notificationPublisher.Publish(eventType, message, pluginId, stageId, attempt, configurationFilePath, exception);
 }

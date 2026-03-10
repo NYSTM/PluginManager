@@ -289,8 +289,8 @@ public sealed class PluginLoaderTests
     {
         using var loader = new PluginLoader();
         var context = new PluginContext();
-        var events = new List<PluginLoaderEventType>();
-        loader.PluginEvent += (_, e) => events.Add(e.EventType);
+        var callback = new TestEventTracker();
+        loader.SetCallback(callback);
 
         var tempFile = Path.GetTempFileName();
         File.WriteAllText(tempFile, """
@@ -304,8 +304,8 @@ public sealed class PluginLoaderTests
         try
         {
             await loader.LoadFromConfigurationAsync(tempFile, context);
-            Assert.Contains(PluginLoaderEventType.LoadStart, events);
-            Assert.Contains(PluginLoaderEventType.LoadCompleted, events);
+            Assert.True(callback.LoadStartCalled);
+            Assert.True(callback.LoadCompletedCalled);
         }
         finally
         {
@@ -318,8 +318,8 @@ public sealed class PluginLoaderTests
     {
         using var loader = new PluginLoader();
         var context = new PluginContext();
-        var events = new List<PluginLoaderEventType>();
-        loader.PluginEvent += (_, e) => events.Add(e.EventType);
+        var callback = new TestEventTracker();
+        loader.SetCallback(callback);
 
         var descriptor = new PluginDescriptor(
             "test-id", "Test", new Version(1, 0, 0),
@@ -333,8 +333,21 @@ public sealed class PluginLoaderTests
 
         await loader.ExecutePluginsAndWaitAsync(loadResults, PluginStage.Processing, context);
 
-        Assert.Contains(PluginLoaderEventType.ExecuteStart, events);
-        Assert.Contains(PluginLoaderEventType.ExecuteCompleted, events);
+        Assert.True(callback.ExecuteStartCalled);
+        Assert.True(callback.ExecuteCompletedCalled);
+    }
+
+    private class TestEventTracker : IPluginLoaderCallback
+    {
+        public bool LoadStartCalled { get; private set; }
+        public bool LoadCompletedCalled { get; private set; }
+        public bool ExecuteStartCalled { get; private set; }
+        public bool ExecuteCompletedCalled { get; private set; }
+
+        public void OnLoadStart(string configurationFilePath) => LoadStartCalled = true;
+        public void OnLoadCompleted(string configurationFilePath) => LoadCompletedCalled = true;
+        public void OnExecuteStart(string stageId) => ExecuteStartCalled = true;
+        public void OnExecuteCompleted(string stageId) => ExecuteCompletedCalled = true;
     }
 
     /// <summary>
@@ -411,7 +424,7 @@ public sealed class PluginLoaderTests
     }
 
     /// <summary>
-    /// ロード失敗プラグイン（Success=false）は実行対象から除外されることを確認します。
+    /// ロード失敗プラグイン（Success=false）はスキップされ、結果に含まれることを確認します。
     /// </summary>
     [Fact]
     public async Task ExecutePluginsAndWaitAsync_SkipsFailedLoadResults()
@@ -440,9 +453,107 @@ public sealed class PluginLoaderTests
         var results = await loader.ExecutePluginsAndWaitAsync(
             loadResults, PluginStage.Processing, context);
 
-        // Assert: ロード失敗分は実行されない
-        Assert.Single(results);
+        // Assert: 両方の結果が返される（スキップされたものを含む）
+        Assert.Equal(2, results.Count);
+        
+        // 最初のプラグインは実行成功
         Assert.Equal("ok-plugin", results[0].Descriptor.Id);
+        Assert.True(results[0].Success);
+        Assert.False(results[0].Skipped);
+
+        // 2 番目のプラグインはスキップされた
+        Assert.Equal("failed-plugin", results[1].Descriptor.Id);
+        Assert.True(results[1].Success);  // スキップもエラーではないため Success = true
+        Assert.True(results[1].Skipped);
+        Assert.Equal("ロードに失敗したためスキップされました。", results[1].SkipReason);
+    }
+
+    /// <summary>
+    /// SupportedStages に含まれないステージで実行した場合、プラグインがスキップされることを確認します。
+    /// </summary>
+    [Fact]
+    public async Task ExecutePluginsAndWaitAsync_SkipsUnsupportedStage()
+    {
+        // Arrange
+        using var loader = new PluginLoader();
+        var context = new PluginContext();
+
+        var descriptor = new PluginDescriptor(
+            "processing-only", "ProcessingOnly", new Version(1, 0, 0),
+            typeof(object), "processing.dll",
+            new[] { PluginStage.Processing }.ToFrozenSet());  // Processing のみサポート
+
+        var loadResults = new List<PluginLoadResult>
+        {
+            new(descriptor, new FakePlugin(), null),
+        };
+
+        // Act: PreProcessing ステージで実行
+        var results = await loader.ExecutePluginsAndWaitAsync(
+            loadResults, PluginStage.PreProcessing, context);
+
+        // Assert: スキップされた
+        Assert.Single(results);
+        Assert.Equal("processing-only", results[0].Descriptor.Id);
+        Assert.True(results[0].Success);
+        Assert.True(results[0].Skipped);
+        Assert.Contains("PreProcessing", results[0].SkipReason);
+        Assert.Contains("対象外", results[0].SkipReason);
+    }
+
+    /// <summary>
+    /// スキップされたプラグインと実行されたプラグインが混在する場合、
+    /// すべての結果が正しく返されることを確認します。
+    /// </summary>
+    [Fact]
+    public async Task ExecutePluginsAndWaitAsync_MixedSkippedAndExecuted()
+    {
+        // Arrange
+        using var loader = new PluginLoader();
+        var context = new PluginContext();
+
+        var preDescriptor = new PluginDescriptor(
+            "pre-only", "PreOnly", new Version(1, 0, 0),
+            typeof(object), "pre.dll",
+            new[] { PluginStage.PreProcessing }.ToFrozenSet());
+
+        var procDescriptor = new PluginDescriptor(
+            "proc-only", "ProcOnly", new Version(1, 0, 0),
+            typeof(object), "proc.dll",
+            new[] { PluginStage.Processing }.ToFrozenSet());
+
+        var bothDescriptor = new PluginDescriptor(
+            "both", "Both", new Version(1, 0, 0),
+            typeof(object), "both.dll",
+            new[] { PluginStage.PreProcessing, PluginStage.Processing }.ToFrozenSet());
+
+        var loadResults = new List<PluginLoadResult>
+        {
+            new(preDescriptor,  new FakePlugin(), null),
+            new(procDescriptor, new FakePlugin(), null),
+            new(bothDescriptor, new FakePlugin(), null),
+        };
+
+        // Act: Processing ステージで実行
+        var results = await loader.ExecutePluginsAndWaitAsync(
+            loadResults, PluginStage.Processing, context);
+
+        // Assert: 3 件の結果が返される
+        Assert.Equal(3, results.Count);
+
+        // pre-only はスキップ
+        Assert.Equal("pre-only", results[0].Descriptor.Id);
+        Assert.True(results[0].Skipped, $"pre-only should be skipped. Actual: Skipped={results[0].Skipped}, Success={results[0].Success}, SkipReason={results[0].SkipReason}");
+
+        // proc-only は実行
+        Assert.Equal("proc-only", results[1].Descriptor.Id);
+        Assert.False(results[1].Skipped);
+        Assert.True(results[1].Success);
+
+        // both は実行
+        Assert.Equal("both", results[2].Descriptor.Id);
+        Assert.False(results[2].Skipped);
+        Assert.True(results[2].Success);
     }
 
     // ExecuteAsync で必ず例外をスローするプラグイン

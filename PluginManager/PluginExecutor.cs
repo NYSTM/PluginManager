@@ -8,27 +8,59 @@ public static class PluginExecutor
     /// <summary>
     /// ロード済みプラグインを指定ステージで並行実行し、全タスクの完了を待機して結果を返します。
     /// 個々のプラグインが例外をスローした場合も他のプラグイン結果は保持されます。
-    /// SupportedStages が一致するプラグインのみが実行対象になります。
+    /// SupportedStages が一致しないプラグインやロードに失敗したプラグインはスキップされます。
     /// </summary>
-    /// <param name="loadResults">ロード結果の一覧。失敗したプラグインは無視されます。</param>
+    /// <param name="loadResults">ロード結果の一覧。</param>
     /// <param name="stage">実行するライフサイクルステージ。</param>
     /// <param name="context">実行コンテキスト。プラグイン間でデータを共有します。</param>
     /// <param name="cancellationToken">キャンセル通知。</param>
-    /// <returns>各プラグインの <see cref="PluginExecutionResult"/> リスト（順序は loadResults の順序に一致）。</returns>
+    /// <returns>
+    /// 各プラグインの <see cref="PluginExecutionResult"/> リスト。
+    /// 順序は <paramref name="loadResults"/> の順序に一致し、スキップされたプラグインも含まれます。
+    /// </returns>
     public static async Task<IReadOnlyList<PluginExecutionResult>> ExecutePluginsAndWaitAsync(
         IReadOnlyList<PluginLoadResult> loadResults,
         PluginStage stage,
         PluginContext context,
         CancellationToken cancellationToken = default)
     {
-        var targets = loadResults
-            .Where(r => r.Success && r.Instance is not null && r.Instance.SupportedStages.Contains(stage))
-            .ToList();
-
-        var tasks = targets.Select(r => ExecuteSafeAsync(r, stage, context, cancellationToken));
+        var tasks = loadResults.Select(r => ExecuteOrSkipAsync(r, stage, context, cancellationToken));
         return await Task.WhenAll(tasks);
     }
 
+    /// <summary>
+    /// プラグインを実行するか、条件に応じてスキップします。
+    /// </summary>
+    private static async Task<PluginExecutionResult> ExecuteOrSkipAsync(
+        PluginLoadResult loadResult,
+        PluginStage stage,
+        PluginContext context,
+        CancellationToken cancellationToken)
+    {
+        // ロード失敗したプラグインはスキップ
+        if (!loadResult.Success || loadResult.Instance is null)
+        {
+            return PluginExecutionResult.CreateSkipped(
+                loadResult.Descriptor,
+                "ロードに失敗したためスキップされました。");
+        }
+
+        // SupportedStages に含まれないプラグインはスキップ
+        // 注: Descriptor の SupportedStages を使用（Instance ではなく）
+        if (!loadResult.Descriptor.SupportedStages.Contains(stage))
+        {
+            return PluginExecutionResult.CreateSkipped(
+                loadResult.Descriptor,
+                $"ステージ '{stage.Id}' は対象外です。");
+        }
+
+        // 実行
+        return await ExecuteSafeAsync(loadResult, stage, context, cancellationToken);
+    }
+
+    /// <summary>
+    /// プラグインを安全に実行します。例外が発生した場合は結果に含めます。
+    /// </summary>
     private static async Task<PluginExecutionResult> ExecuteSafeAsync(
         PluginLoadResult loadResult,
         PluginStage stage,

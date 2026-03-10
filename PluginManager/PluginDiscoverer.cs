@@ -36,11 +36,13 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
 
     /// <summary>
     /// 指定ディレクトリからプラグイン DLL を探索し、<see cref="PluginDescriptor"/> の一覧を返します。
+    /// DLL ファイルのスキャンは並列で実行されます。
     /// </summary>
     /// <param name="directoryPath">探索対象のディレクトリパス。</param>
     /// <param name="searchPattern">DLL 検索パターン。既定値は <c>*.dll</c>。</param>
     /// <returns>発見した <see cref="PluginDescriptor"/> の一覧。</returns>
     /// <exception cref="ArgumentException"><paramref name="directoryPath"/> が空白の場合。</exception>
+    /// <exception cref="InvalidOperationException">同じ ID を持つプラグインが複数発見された場合。</exception>
     public IReadOnlyList<PluginDescriptor> Discover(string directoryPath, string searchPattern = "*.dll")
     {
         if (string.IsNullOrWhiteSpace(directoryPath))
@@ -49,25 +51,34 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
         if (!Directory.Exists(directoryPath))
             return [];
 
-        var descriptors = new List<PluginDescriptor>();
-        foreach (var file in Directory.EnumerateFiles(directoryPath, searchPattern, SearchOption.TopDirectoryOnly))
-            TryDiscoverFromAssembly(file, descriptors);
+        var files = Directory.EnumerateFiles(directoryPath, searchPattern, SearchOption.TopDirectoryOnly);
 
-        return descriptors;
+        // 各ファイルを並列処理し、それぞれのスレッドで独立したリストを作成
+        var allDescriptors = files
+            .AsParallel()
+            .SelectMany(file => DiscoverFromAssembly(file))
+            .ToList();
+
+        // プラグイン ID の重複をチェック
+        ValidateNoDuplicates(allDescriptors);
+
+        return allDescriptors;
     }
 
     /// <summary>
     /// 1 つのアセンブリファイルを一時コンテキストでロードし、
-    /// <see cref="IPlugin"/> 実装型を <paramref name="descriptors"/> に追加します。
-    /// ロードに失敗したアセンブリは無視します。
+    /// <see cref="IPlugin"/> 実装型のリストを返します。
+    /// ロードに失敗した場合は空のリストを返します。
     /// </summary>
-    private void TryDiscoverFromAssembly(string assemblyPath, List<PluginDescriptor> descriptors)
+    private IEnumerable<PluginDescriptor> DiscoverFromAssembly(string assemblyPath)
     {
+        var descriptors = new List<PluginDescriptor>();
         PluginLoadContext? loadContext = null;
         try
         {
             loadContext = new PluginLoadContext(assemblyPath);
             var assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath));
+            
             foreach (var type in assembly.GetTypes())
             {
                 if (type.IsAbstract || !typeof(IPlugin).IsAssignableFrom(type))
@@ -87,6 +98,8 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
         {
             loadContext?.Unload();
         }
+        
+        return descriptors;
     }
 
     /// <summary>
@@ -118,5 +131,28 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
             pluginType,
             assemblyPath,
             _defaultStages);
+    }
+
+    /// <summary>
+    /// プラグイン ID の重複を検証します。
+    /// </summary>
+    /// <param name="descriptors">検証対象のプラグイン記述子リスト。</param>
+    /// <exception cref="InvalidOperationException">同じ ID を持つプラグインが複数存在する場合。</exception>
+    private static void ValidateNoDuplicates(List<PluginDescriptor> descriptors)
+    {
+        var duplicates = descriptors
+            .GroupBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .ToList();
+
+        if (duplicates.Count > 0)
+        {
+            var duplicateIds = string.Join(", ", duplicates.Select(g => $"'{g.Key}'"));
+            var details = string.Join("; ", duplicates.Select(g =>
+                $"{g.Key}: {string.Join(", ", g.Select(d => Path.GetFileName(d.AssemblyPath)))}"));
+
+            throw new InvalidOperationException(
+                $"プラグイン ID が重複しています: {duplicateIds}。詳細: {details}");
+        }
     }
 }
