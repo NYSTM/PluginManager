@@ -24,13 +24,16 @@ using Microsoft.Extensions.Logging;
 /// </para>
 /// <para>
 /// <b>通知方式</b><br/>
-/// ライフサイクル通知を受け取るには <see cref="SetCallback"/> でコールバックを設定してください。
+/// ライフサイクル通知を受け取るには <see cref="SetCallback"/>、実行通知を受け取るには <see cref="SetExecutorCallback"/> を設定してください。
 /// </para>
 /// </remarks>
 public sealed class PluginLoader : IDisposable, IAsyncDisposable
 {
+    private const int MaxExecutionParallelismHardLimit = 32;
+
     private readonly PluginDiscoverer _discoverer;
     private readonly PluginLoaderNotificationPublisher _notificationPublisher;
+    private readonly PluginExecutorNotificationPublisher _executorNotificationPublisher;
     private readonly IReadOnlyDictionary<PluginIsolationMode, IPluginRuntime> _runtimes;
     private bool _disposed;
     private PluginConfiguration? _lastConfig;
@@ -38,6 +41,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     public PluginLoader(ILogger<PluginLoader>? logger = null)
     {
         _notificationPublisher = new(logger);
+        _executorNotificationPublisher = new(logger);
         _discoverer = new(logger);
         _runtimes = new Dictionary<PluginIsolationMode, IPluginRuntime>
         {
@@ -66,6 +70,13 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     public void SetCallback(IPluginLoaderCallback? callback)
         => _notificationPublisher.SetCallback(callback);
 
+    /// <summary>
+    /// プラグイン実行通知を受け取るコールバックを設定します。
+    /// </summary>
+    /// <param name="callback">通知を受け取るコールバック実装。<see langword="null"/> で解除。</param>
+    public void SetExecutorCallback(IPluginExecutorCallback? callback)
+        => _executorNotificationPublisher.SetCallback(callback);
+
     public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(
         string configurationFilePath, 
         string searchPattern = "*.dll",
@@ -86,8 +97,11 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        var executionId = CreateExecutionId();
+
         PublishNotification(PluginLoaderNotificationType.LoadStart, "設定ファイルを使用したプラグインロードを開始します。",
-            configurationFilePath: configurationFilePath);
+            configurationFilePath: configurationFilePath,
+            executionId: executionId);
 
         var config = PluginConfigurationLoader.Load(configurationFilePath);
         _lastConfig = config;
@@ -95,7 +109,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         if (string.IsNullOrWhiteSpace(config.PluginsPath))
             return [];
 
-        var descriptors = _discoverer.Discover(config.PluginsPath, searchPattern);
+        var descriptors = _discoverer.Discover(config.PluginsPath, searchPattern, cancellationToken);
         var groups = PluginOrderResolver.BuildExecutionGroups(descriptors, config.StageOrders, config.PluginDependencies);
         var results = new List<PluginLoadResult>(descriptors.Count);
 
@@ -108,13 +122,15 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
                 config.TimeoutMilliseconds,
                 config.RetryCount,
                 config.RetryDelayMilliseconds,
-                cancellationToken));
+                cancellationToken,
+                executionId));
 
             results.AddRange(await Task.WhenAll(tasks));
         }
 
         PublishNotification(PluginLoaderNotificationType.LoadCompleted, "設定ファイルを使用したプラグインロードが完了しました。",
-            configurationFilePath: configurationFilePath);
+            configurationFilePath: configurationFilePath,
+            executionId: executionId);
 
         return results;
     }
@@ -127,7 +143,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var descriptors = _discoverer.Discover(directoryPath, searchPattern);
+        var descriptors = _discoverer.Discover(directoryPath, searchPattern, cancellationToken);
         var tasks = descriptors.Select(d => LoadPluginAsync(d, context, cancellationToken));
         return await Task.WhenAll(tasks);
     }
@@ -169,11 +185,33 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         PluginContext context,
         CancellationToken cancellationToken = default)
     {
-        PublishNotification(PluginLoaderNotificationType.ExecuteStart, "プラグイン実行を開始します。", stageId: stage.Id);
+        var executionId = CreateExecutionId();
+
+        PublishNotification(
+            PluginLoaderNotificationType.ExecuteStart,
+            "プラグイン実行を開始します。",
+            stageId: stage.Id,
+            executionId: executionId);
+
+        var maxDegreeOfParallelism = ResolveStageMaxDegreeOfParallelism(stage);
         var task = BuildExecutionGroupsForResults(loadResults) is { Count: > 0 } groups
-            ? PluginExecutor.ExecutePluginsInGroupsAsync(groups, stage, context, cancellationToken)
-            : PluginExecutor.ExecutePluginsAndWaitAsync(loadResults, stage, context, cancellationToken);
-        return CompleteExecuteAsync(task, stage.Id);
+            ? PluginExecutor.ExecutePluginsInGroupsCoreAsync(
+                groups,
+                stage,
+                context,
+                cancellationToken,
+                maxDegreeOfParallelism,
+                _executorNotificationPublisher,
+                executionId)
+            : PluginExecutor.ExecutePluginsAndWaitCoreAsync(
+                loadResults,
+                stage,
+                context,
+                cancellationToken,
+                _executorNotificationPublisher,
+                executionId);
+
+        return CompleteExecuteAsync(task, stage.Id, executionId);
     }
 
     /// <summary>
@@ -253,10 +291,17 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         int timeoutMilliseconds,
         int retryCount,
         int retryDelayMilliseconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string executionId)
     {
         var result = await LoadPluginWithRetryAsync(
-            descriptor, context, timeoutMilliseconds, retryCount, retryDelayMilliseconds, cancellationToken);
+            descriptor,
+            context,
+            timeoutMilliseconds,
+            retryCount,
+            retryDelayMilliseconds,
+            cancellationToken,
+            executionId);
 
         if (intervalMilliseconds > 0 && !cancellationToken.IsCancellationRequested)
         {
@@ -273,7 +318,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         int timeoutMilliseconds,
         int retryCount,
         int retryDelayMilliseconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string executionId)
     {
         return await RetryHelper.ExecuteWithRetryAsync(
             operation: async ct => await LoadPluginWithTimeoutAsync(descriptor, context, timeoutMilliseconds, ct),
@@ -289,7 +335,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
                     PluginLoaderNotificationType.PluginLoadStart,
                     $"プラグイン '{descriptor.Id}' のロードを開始します。",
                     pluginId: descriptor.Id,
-                    attempt: attempt);
+                    attempt: attempt,
+                    executionId: executionId);
             },
             onSuccess: (attempt, _) =>
             {
@@ -297,7 +344,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
                     PluginLoaderNotificationType.PluginLoadSuccess,
                     $"プラグイン '{descriptor.Id}' のロードに成功しました。",
                     pluginId: descriptor.Id,
-                    attempt: attempt);
+                    attempt: attempt,
+                    executionId: executionId);
             },
             onRetry: (attempt, result) =>
             {
@@ -306,7 +354,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
                     $"プラグイン '{descriptor.Id}' のロードをリトライします。",
                     pluginId: descriptor.Id,
                     attempt: attempt,
-                    exception: result.Error);
+                    exception: result.Error,
+                    executionId: executionId);
             },
             onFailed: (attempt, result) =>
             {
@@ -321,7 +370,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
                     $"プラグイン '{descriptor.Id}' のロードに失敗しました。理由: {reason}",
                     pluginId: descriptor.Id,
                     attempt: attempt,
-                    exception: result.Error);
+                    exception: result.Error,
+                    executionId: executionId);
             });
     }
 
@@ -349,17 +399,29 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         return result;
     }
 
-    private async Task<IReadOnlyList<PluginExecutionResult>> CompleteExecuteAsync(Task<IReadOnlyList<PluginExecutionResult>> executeTask, string stageId)
+    private async Task<IReadOnlyList<PluginExecutionResult>> CompleteExecuteAsync(
+        Task<IReadOnlyList<PluginExecutionResult>> executeTask,
+        string stageId,
+        string executionId)
     {
         try
         {
             var result = await executeTask;
-            PublishNotification(PluginLoaderNotificationType.ExecuteCompleted, "プラグイン実行が完了しました。", stageId: stageId);
+            PublishNotification(
+                PluginLoaderNotificationType.ExecuteCompleted,
+                "プラグイン実行が完了しました。",
+                stageId: stageId,
+                executionId: executionId);
             return result;
         }
         catch (Exception ex)
         {
-            PublishNotification(PluginLoaderNotificationType.ExecuteFailed, "プラグイン実行中にエラーが発生しました。", stageId: stageId, exception: ex);
+            PublishNotification(
+                PluginLoaderNotificationType.ExecuteFailed,
+                "プラグイン実行中にエラーが発生しました。",
+                stageId: stageId,
+                exception: ex,
+                executionId: executionId);
             throw;
         }
     }
@@ -392,6 +454,37 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
             .ToList();
     }
 
-    private void PublishNotification(PluginLoaderNotificationType notificationType, string message, string? pluginId = null, string? stageId = null, int? attempt = null, string? configurationFilePath = null, Exception? exception = null)
-        => _notificationPublisher.Publish(notificationType, message, pluginId, stageId, attempt, configurationFilePath, exception);
+    private static int GetExecutionParallelismHardLimit()
+        => Math.Clamp(Environment.ProcessorCount, 1, MaxExecutionParallelismHardLimit);
+
+    private int? ResolveStageMaxDegreeOfParallelism(PluginStage stage)
+    {
+        var configured = _lastConfig?.GetStageMaxDegreeOfParallelism(stage);
+        if (configured is null)
+            return null;
+
+        return Math.Min(configured.Value, GetExecutionParallelismHardLimit());
+    }
+
+    private static string CreateExecutionId()
+        => Guid.NewGuid().ToString("N");
+
+    private void PublishNotification(
+        PluginLoaderNotificationType notificationType,
+        string message,
+        string? pluginId = null,
+        string? stageId = null,
+        int? attempt = null,
+        string? configurationFilePath = null,
+        Exception? exception = null,
+        string? executionId = null)
+        => _notificationPublisher.Publish(
+            notificationType,
+            message,
+            pluginId,
+            stageId,
+            attempt,
+            configurationFilePath,
+            exception,
+            executionId);
 }

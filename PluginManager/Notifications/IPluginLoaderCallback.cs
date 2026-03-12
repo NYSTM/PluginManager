@@ -38,6 +38,13 @@
 public interface IPluginLoaderCallback
 {
     /// <summary>
+    /// 通知の生データを受け取ります。
+    /// 実行トレースIDなどの共通メタデータを利用したい場合に実装してください。
+    /// </summary>
+    /// <param name="notification">通知オブジェクト。</param>
+    void OnNotification(PluginLoaderNotification notification) { }
+
+    /// <summary>
     /// 設定ファイルを使用したプラグインロードが開始されたときに呼ばれます。
     /// </summary>
     /// <param name="configurationFilePath">設定ファイルのパス。</param>

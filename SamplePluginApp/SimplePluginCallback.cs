@@ -4,7 +4,6 @@ namespace SamplePluginApp;
 
 /// <summary>
 /// コールバック方式によるプラグインロード通知の受け取り例です。
-/// イベントハンドラよりも直感的に実装できます。
 /// </summary>
 public class SimplePluginCallback : IPluginLoaderCallback
 {

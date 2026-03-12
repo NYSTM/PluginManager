@@ -477,4 +477,71 @@ public sealed class PluginConfigurationTests
             File.Delete(tempFile);
         }
     }
+
+    /// <summary>
+    /// StageOrders の MaxDegreeOfParallelism が正しく読み込まれることを確認します。
+    /// </summary>
+    [Fact]
+    public void Load_WithStageMaxDegreeOfParallelism_ReturnsConfiguration()
+    {
+        var tempFile = Path.GetTempFileName();
+        var json = """
+        {
+          "PluginsPath": "plugins",
+          "StageOrders": [
+            {
+              "Stage": "Processing",
+              "MaxDegreeOfParallelism": 2,
+              "PluginOrder": [
+                { "Id": "plugin-a", "Order": 1 }
+              ]
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(tempFile, json);
+
+        try
+        {
+            var config = PluginConfiguration.Load(tempFile);
+            Assert.Equal(2, config.GetStageMaxDegreeOfParallelism(PluginStage.Processing));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    /// <summary>
+    /// StageOrders の MaxDegreeOfParallelism が 0 以下の場合に例外が発生することを確認します。
+    /// </summary>
+    [Fact]
+    public void Load_InvalidStageMaxDegreeOfParallelism_ThrowsInvalidOperationException()
+    {
+        var tempFile = Path.GetTempFileName();
+        var json = """
+        {
+          "PluginsPath": "plugins",
+          "StageOrders": [
+            {
+              "Stage": "Processing",
+              "MaxDegreeOfParallelism": 0,
+              "PluginOrder": [
+                { "Id": "plugin-a", "Order": 1 }
+              ]
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(tempFile, json);
+
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => PluginConfiguration.Load(tempFile));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
 }

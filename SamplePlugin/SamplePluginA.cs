@@ -9,6 +9,8 @@ namespace SamplePlugin;
 [Plugin("sample-plugin-a", "サンプルプラグインA", "1.0.0", "PreProcessing")]
 public sealed class SamplePluginA : IPlugin
 {
+    private static readonly ContextKey<Action<string>> _callbackKey = new("sample.Callback");
+
     public string Id => "sample-plugin-a";
     public string Name => "サンプルプラグインA";
     public Version Version => new(1, 0, 0);
@@ -18,20 +20,30 @@ public sealed class SamplePluginA : IPlugin
     public async Task InitializeAsync(PluginContext context, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"[{Name}] 初期化を開始します。");
+        NotifyCallback(context, $"[{Name}] 初期化を開始します。");
         cancellationToken.ThrowIfCancellationRequested();
         context.SetProperty("InitializedBy", Name);
         context.SetProperty("InitializedAt", DateTime.Now);
         await Task.Delay(100, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         Console.WriteLine($"[{Name}] 初期化が完了しました。");
+        NotifyCallback(context, $"[{Name}] 初期化が完了しました。");
     }
 
     public async Task<object?> ExecuteAsync(PluginStage stage, PluginContext context, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"[{Name}] PreProcessingステージ実行開始");
+        NotifyCallback(context, $"[{Name}] PreProcessingステージ実行開始");
         await Task.Delay(500, cancellationToken);
         var result = $"{Name}: PreProcessing完了 at {DateTime.Now:HH:mm:ss}";
         Console.WriteLine($"[{Name}] {result}");
+        NotifyCallback(context, $"[{Name}] {result}");
         return result;
+    }
+
+    private static void NotifyCallback(PluginContext context, string message)
+    {
+        if (context.TryGetProperty(_callbackKey, out Action<string>? callback))
+            callback?.Invoke(message);
     }
 }

@@ -1,6 +1,6 @@
-﻿using System.Text.Json;
+﻿namespace PluginManager;
 
-namespace PluginManager;
+using System.Text.Json;
 
 /// <summary>
 /// 設定ファイルから <see cref="PluginConfiguration"/> を読み込みます。
@@ -68,6 +68,9 @@ public static class PluginConfigurationLoader
 
             if (stageOrder.PluginOrder is null)
                 throw new InvalidOperationException($"StageOrders[{i}].PluginOrder は必須です。");
+
+            if (stageOrder.MaxDegreeOfParallelism is <= 0)
+                throw new InvalidOperationException($"StageOrders[{i}].MaxDegreeOfParallelism は 1 以上で指定してください。");
 
             // ステージ内でのプラグイン ID の重複をチェック
             var pluginIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

@@ -8,6 +8,7 @@ using System.Collections.Frozen;
 public sealed class PluginConfiguration
 {
     private FrozenDictionary<PluginStage, IReadOnlyList<PluginOrderEntry>>? _stageOrderCache;
+    private FrozenDictionary<PluginStage, int?>? _stageParallelismCache;
 
     /// <summary>
     /// プラグイン DLL を探索するディレクトリパスを取得します。
@@ -23,7 +24,8 @@ public sealed class PluginConfiguration
         init
         {
             _stageOrders = value;
-            _stageOrderCache = null; // キャッシュをリセット（初回 GetPluginOrder 呼び出し時に再構築）
+            _stageOrderCache = null;
+            _stageParallelismCache = null;
         }
     }
     private IReadOnlyList<PluginStageOrderEntry> _stageOrders = [];
@@ -74,6 +76,14 @@ public sealed class PluginConfiguration
         => GetOrBuildCache().TryGetValue(stage, out var order) ? order : [];
 
     /// <summary>
+    /// 指定ステージの同時実行上限を取得します。
+    /// 設定がない場合は <see langword="null"/> を返します。
+    /// </summary>
+    /// <param name="stage">対象ステージ。</param>
+    public int? GetStageMaxDegreeOfParallelism(PluginStage stage)
+        => GetOrBuildParallelismCache().TryGetValue(stage, out var maxDegree) ? maxDegree : null;
+
+    /// <summary>
     /// <see cref="PluginsPath"/> が相対パスの場合、<paramref name="basePath"/> を起点に
     /// 絶対パスへ変換した新しい <see cref="PluginConfiguration"/> を返します。
     /// 既に絶対パスの場合はそのまま返します。
@@ -115,6 +125,22 @@ public sealed class PluginConfiguration
             if (e.Stage is not null)
                 dict[e.Stage] = e.PluginOrder;
         }
+
         return _stageOrderCache = dict.ToFrozenDictionary();
+    }
+
+    private FrozenDictionary<PluginStage, int?> GetOrBuildParallelismCache()
+    {
+        if (_stageParallelismCache is not null)
+            return _stageParallelismCache;
+
+        var dict = new Dictionary<PluginStage, int?>();
+        foreach (var e in _stageOrders)
+        {
+            if (e.Stage is not null)
+                dict[e.Stage] = e.MaxDegreeOfParallelism;
+        }
+
+        return _stageParallelismCache = dict.ToFrozenDictionary();
     }
 }

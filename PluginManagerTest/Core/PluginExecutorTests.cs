@@ -173,6 +173,32 @@ public sealed class PluginExecutorTests
         Assert.Single(results);
     }
 
+    [Fact]
+    public async Task ExecutePluginsInGroupsAsync_WithMaxDegreeOfParallelism_LimitsConcurrency()
+    {
+        var context = new PluginContext();
+        var concurrencyProbe = new ConcurrencyProbe();
+
+        var groups = BuildGroups(context,
+            (1,
+                [
+                    ("plugin-a", (IPlugin)new ConcurrencyTrackingPlugin("plugin-a", concurrencyProbe, 80)),
+                    ("plugin-b", (IPlugin)new ConcurrencyTrackingPlugin("plugin-b", concurrencyProbe, 80)),
+                    ("plugin-c", (IPlugin)new ConcurrencyTrackingPlugin("plugin-c", concurrencyProbe, 80)),
+                ]));
+
+        var results = await PluginExecutor.ExecutePluginsInGroupsAsync(
+            groups,
+            _stage,
+            context,
+            cancellationToken: default,
+            maxDegreeOfParallelism: 1);
+
+        Assert.Equal(3, results.Count);
+        Assert.All(results, r => Assert.True(r.Success));
+        Assert.Equal(1, concurrencyProbe.MaxObserved);
+    }
+
     // ---------------------------------------------------------------
     // ヘルパー
     // ---------------------------------------------------------------
@@ -256,5 +282,55 @@ public sealed class PluginExecutorTests
 
         public Task<object?> ExecuteAsync(PluginStage stage, PluginContext context, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("テスト例外");
+    }
+
+    private sealed class ConcurrencyProbe
+    {
+        private int _current;
+        private int _maxObserved;
+
+        public int MaxObserved => _maxObserved;
+
+        public void Enter()
+        {
+            var current = Interlocked.Increment(ref _current);
+            while (true)
+            {
+                var snapshot = Volatile.Read(ref _maxObserved);
+                if (current <= snapshot)
+                    return;
+                if (Interlocked.CompareExchange(ref _maxObserved, current, snapshot) == snapshot)
+                    return;
+            }
+        }
+
+        public void Exit()
+            => Interlocked.Decrement(ref _current);
+    }
+
+    private sealed class ConcurrencyTrackingPlugin(string id, ConcurrencyProbe probe, int delayMs) : IPlugin
+    {
+        public string Id => id;
+        public string Name => id;
+        public Version Version => new(1, 0, 0);
+        public IReadOnlySet<PluginStage> SupportedStages { get; } =
+            new[] { _stage }.ToFrozenSet();
+
+        public Task InitializeAsync(PluginContext context, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public async Task<object?> ExecuteAsync(PluginStage stage, PluginContext context, CancellationToken cancellationToken = default)
+        {
+            probe.Enter();
+            try
+            {
+                await Task.Delay(delayMs, cancellationToken);
+                return id;
+            }
+            finally
+            {
+                probe.Exit();
+            }
+        }
     }
 }

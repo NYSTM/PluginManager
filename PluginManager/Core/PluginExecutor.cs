@@ -14,6 +14,8 @@ public static class PluginExecutor
     /// <param name="stage">実行するライフサイクルステージ。</param>
     /// <param name="context">実行コンテキスト。プラグイン間でデータを共有します。</param>
     /// <param name="cancellationToken">キャンセル通知。</param>
+    /// <param name="callback">実行通知を受け取るコールバック。</param>
+    /// <param name="executionId">同一実行サイクルを識別するトレース ID。</param>
     /// <returns>
     /// 各プラグインの <see cref="PluginExecutionResult"/> リスト。
     /// 順序は <paramref name="loadResults"/> の順序に一致し、スキップされたプラグインも含まれます。
@@ -22,10 +24,12 @@ public static class PluginExecutor
         IReadOnlyList<PluginLoadResult> loadResults,
         PluginStage stage,
         PluginContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IPluginExecutorCallback? callback = null,
+        string? executionId = null)
     {
-        var tasks = loadResults.Select(r => ExecuteOrSkipAsync(r, stage, context, cancellationToken));
-        return await Task.WhenAll(tasks);
+        var notificationPublisher = CreateNotificationPublisher(callback);
+        return await ExecutePluginsAndWaitCoreAsync(loadResults, stage, context, cancellationToken, notificationPublisher, executionId);
     }
 
     /// <summary>
@@ -39,6 +43,9 @@ public static class PluginExecutor
     /// <param name="stage">実行するライフサイクルステージ。</param>
     /// <param name="context">実行コンテキスト。プラグイン間でデータを共有します。</param>
     /// <param name="cancellationToken">キャンセル通知。</param>
+    /// <param name="maxDegreeOfParallelism">同時実行上限。<see langword="null"/> の場合は無制限。</param>
+    /// <param name="callback">実行通知を受け取るコールバック。</param>
+    /// <param name="executionId">同一実行サイクルを識別するトレース ID。</param>
     /// <returns>
     /// 各プラグインの <see cref="PluginExecutionResult"/> リスト。
     /// グループ順・グループ内の入力順に並びます。
@@ -47,65 +54,210 @@ public static class PluginExecutor
         IReadOnlyList<IReadOnlyList<PluginLoadResult>> groups,
         PluginStage stage,
         PluginContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? maxDegreeOfParallelism = null,
+        IPluginExecutorCallback? callback = null,
+        string? executionId = null)
+    {
+        var notificationPublisher = CreateNotificationPublisher(callback);
+        return await ExecutePluginsInGroupsCoreAsync(groups, stage, context, cancellationToken, maxDegreeOfParallelism, notificationPublisher, executionId);
+    }
+
+    internal static async Task<IReadOnlyList<PluginExecutionResult>> ExecutePluginsAndWaitCoreAsync(
+        IReadOnlyList<PluginLoadResult> loadResults,
+        PluginStage stage,
+        PluginContext context,
+        CancellationToken cancellationToken,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
+    {
+        return await ExecuteGroupAsync(loadResults, stage, context, 1, cancellationToken, notificationPublisher, executionId);
+    }
+
+    internal static async Task<IReadOnlyList<PluginExecutionResult>> ExecutePluginsInGroupsCoreAsync(
+        IReadOnlyList<IReadOnlyList<PluginLoadResult>> groups,
+        PluginStage stage,
+        PluginContext context,
+        CancellationToken cancellationToken,
+        int? maxDegreeOfParallelism,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
     {
         var all = new List<PluginExecutionResult>();
-        foreach (var group in groups)
+        for (int i = 0; i < groups.Count; i++)
         {
-            var tasks = group.Select(r => ExecuteOrSkipAsync(r, stage, context, cancellationToken));
-            var results = await Task.WhenAll(tasks);
+            var groupIndex = i + 1;
+            var group = groups[i];
+
+            notificationPublisher?.Publish(
+                PluginExecutorNotificationType.GroupStart,
+                $"グループ {groupIndex} の実行を開始します。",
+                stage.Id,
+                groupIndex,
+                executionId: executionId);
+
+            var results = maxDegreeOfParallelism is > 0
+                ? await ExecuteGroupWithLimitAsync(group, stage, context, groupIndex, maxDegreeOfParallelism.Value, cancellationToken, notificationPublisher, executionId)
+                : await ExecuteGroupAsync(group, stage, context, groupIndex, cancellationToken, notificationPublisher, executionId);
+
             all.AddRange(results);
+
+            notificationPublisher?.Publish(
+                PluginExecutorNotificationType.GroupCompleted,
+                $"グループ {groupIndex} の実行が完了しました。",
+                stage.Id,
+                groupIndex,
+                executionId: executionId);
         }
+
         return all;
     }
 
-    /// <summary>
-    /// プラグインを実行するか、条件に応じてスキップします。
-    /// </summary>
+    private static PluginExecutorNotificationPublisher? CreateNotificationPublisher(IPluginExecutorCallback? callback)
+    {
+        if (callback is null)
+            return null;
+
+        var notificationPublisher = new PluginExecutorNotificationPublisher(logger: null);
+        notificationPublisher.SetCallback(callback);
+        return notificationPublisher;
+    }
+
+    private static async Task<IReadOnlyList<PluginExecutionResult>> ExecuteGroupAsync(
+        IReadOnlyList<PluginLoadResult> group,
+        PluginStage stage,
+        PluginContext context,
+        int groupIndex,
+        CancellationToken cancellationToken,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
+    {
+        var tasks = group.Select(r => ExecuteOrSkipAsync(r, stage, context, groupIndex, cancellationToken, notificationPublisher, executionId));
+        return await Task.WhenAll(tasks);
+    }
+
+    private static async Task<IReadOnlyList<PluginExecutionResult>> ExecuteGroupWithLimitAsync(
+        IReadOnlyList<PluginLoadResult> group,
+        PluginStage stage,
+        PluginContext context,
+        int groupIndex,
+        int maxDegreeOfParallelism,
+        CancellationToken cancellationToken,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
+    {
+        using var gate = new SemaphoreSlim(maxDegreeOfParallelism, maxDegreeOfParallelism);
+
+        var tasks = group.Select(async r =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                return await ExecuteOrSkipAsync(r, stage, context, groupIndex, cancellationToken, notificationPublisher, executionId);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        return await Task.WhenAll(tasks);
+    }
+
     private static async Task<PluginExecutionResult> ExecuteOrSkipAsync(
         PluginLoadResult loadResult,
         PluginStage stage,
         PluginContext context,
-        CancellationToken cancellationToken)
+        int groupIndex,
+        CancellationToken cancellationToken,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
     {
-        // ロード失敗したプラグインはスキップ
         if (!loadResult.Success || loadResult.Instance is null)
         {
-            return PluginExecutionResult.CreateSkipped(
+            return CreateSkippedResult(
                 loadResult.Descriptor,
-                "ロードに失敗したためスキップされました。");
+                stage,
+                groupIndex,
+                "ロードに失敗したためスキップされました。",
+                notificationPublisher,
+                executionId);
         }
 
-        // SupportedStages に含まれないプラグインはスキップ
-        // 注: Descriptor の SupportedStages を使用（Instance ではなく）
         if (!loadResult.Descriptor.SupportedStages.Contains(stage))
         {
-            return PluginExecutionResult.CreateSkipped(
+            return CreateSkippedResult(
                 loadResult.Descriptor,
-                $"ステージ '{stage.Id}' は対象外です。");
+                stage,
+                groupIndex,
+                $"ステージ '{stage.Id}' は対象外です。",
+                notificationPublisher,
+                executionId);
         }
 
-        // 実行
-        return await ExecuteSafeAsync(loadResult, stage, context, cancellationToken);
+        return await ExecuteSafeAsync(loadResult, stage, context, groupIndex, cancellationToken, notificationPublisher, executionId);
     }
 
-    /// <summary>
-    /// プラグインを安全に実行します。例外が発生した場合は結果に含めます。
-    /// </summary>
     private static async Task<PluginExecutionResult> ExecuteSafeAsync(
         PluginLoadResult loadResult,
         PluginStage stage,
         PluginContext context,
-        CancellationToken cancellationToken)
+        int groupIndex,
+        CancellationToken cancellationToken,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
     {
+        notificationPublisher?.Publish(
+            PluginExecutorNotificationType.PluginExecuteStart,
+            $"プラグイン '{loadResult.Descriptor.Id}' の実行を開始します。",
+            stage.Id,
+            groupIndex,
+            loadResult.Descriptor.Id,
+            executionId);
+
         try
         {
             var value = await loadResult.Instance!.ExecuteAsync(stage, context, cancellationToken);
+            notificationPublisher?.Publish(
+                PluginExecutorNotificationType.PluginExecuteCompleted,
+                $"プラグイン '{loadResult.Descriptor.Id}' の実行が完了しました。",
+                stage.Id,
+                groupIndex,
+                loadResult.Descriptor.Id,
+                executionId);
             return new(loadResult.Descriptor, value, null);
         }
         catch (Exception ex)
         {
+            notificationPublisher?.Publish(
+                PluginExecutorNotificationType.PluginExecuteFailed,
+                $"プラグイン '{loadResult.Descriptor.Id}' の実行に失敗しました。",
+                stage.Id,
+                groupIndex,
+                loadResult.Descriptor.Id,
+                executionId,
+                exception: ex);
             return new(loadResult.Descriptor, null, ex);
         }
+    }
+
+    private static PluginExecutionResult CreateSkippedResult(
+        PluginDescriptor descriptor,
+        PluginStage stage,
+        int groupIndex,
+        string skipReason,
+        PluginExecutorNotificationPublisher? notificationPublisher,
+        string? executionId)
+    {
+        notificationPublisher?.Publish(
+            PluginExecutorNotificationType.PluginSkipped,
+            $"プラグイン '{descriptor.Id}' はスキップされました。理由: {skipReason}",
+            stage.Id,
+            groupIndex,
+            descriptor.Id,
+            executionId,
+            skipReason: skipReason);
+
+        return PluginExecutionResult.CreateSkipped(descriptor, skipReason);
     }
 }

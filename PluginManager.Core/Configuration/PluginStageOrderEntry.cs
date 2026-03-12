@@ -19,4 +19,10 @@ public sealed class PluginStageOrderEntry
     /// このステージで実行するプラグインの順序定義を取得します。
     /// </summary>
     public IReadOnlyList<PluginOrderEntry> PluginOrder { get; init; } = [];
+
+    /// <summary>
+    /// このステージの同時実行上限を取得します。
+    /// 未指定時はローダー既定値を使用します。
+    /// </summary>
+    public int? MaxDegreeOfParallelism { get; init; }
 }

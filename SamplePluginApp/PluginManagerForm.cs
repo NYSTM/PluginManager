@@ -73,11 +73,13 @@ public partial class PluginManagerForm : Form
             _loader = new PluginLoader();
             _loadResults = [];
 
-            // コールバック方式で通知を受け取る（イベントハンドラより直感的）
+            // コールバック方式で通知を受け取る
             _loader.SetCallback(new SimplePluginCallback(AppendLog));
+            _loader.SetExecutorCallback(new SimplePluginExecutorCallback(AppendLog));
 
             // ロードのたびに実行コンテキストをリセット
             _executionContext = new PluginContext();
+            _executionContext.SetProperty("sample.Callback", (Action<string>)OnSamplePluginCallback);
 
             _loadResults = await _loader.LoadFromConfigurationAsync(configPath, _executionContext);
 
@@ -218,6 +220,9 @@ public partial class PluginManagerForm : Form
     // ──────────────────────────────────────────────
     // ログ出力
     // ──────────────────────────────────────────────
+
+    private void OnSamplePluginCallback(string message)
+        => AppendLog($"🔔 Sample.Callback: {message}", LogLevel.Info);
 
     private void AppendLog(string message, LogLevel level = LogLevel.Info)
     {

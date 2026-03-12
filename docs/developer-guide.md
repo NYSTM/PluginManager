@@ -122,6 +122,7 @@
   "StageOrders": [
     {
       "Stage": "Processing",
+      "MaxDegreeOfParallelism": 2,
       "PluginOrder": [
         { "Id": "my-plugin", "Order": 1 }
       ]
@@ -136,6 +137,10 @@
 2. `TimeoutMilliseconds` にタイムアウトを書く
 3. `RetryCount` に再試行回数を書く
 4. `StageOrders` に実行ステージと順序を書く
+
+`MaxDegreeOfParallelism` は任意の調整項目です。
+同一ステージ内の同時実行上限を制御したい場合だけ指定してください。
+未指定時は既定の実行方式が使われ、指定時もホスト側の安全上限内で適用されます。
 
 ### 4-3. `Order` の考え方
 
@@ -285,6 +290,7 @@ public sealed class CustomInitPlugin : PluginBase
 ### 5-5. コールバック方式の利用
 
 `IPluginLoaderCallback` を実装すると、ロードや実行の通知を受け取れます。
+通常の通知メソッドに加えて、`OnNotification` を実装すると `ExecutionId` を含む通知オブジェクト全体を受け取れます。
 
 ```csharp
 public class MyCallback : IPluginLoaderCallback
@@ -302,6 +308,54 @@ public class MyCallback : IPluginLoaderCallback
         => Console.WriteLine($"ステージ [{stageId}] 実行開始");
 }
 ```
+
+### 5-6. `OnNotification` と `ExecutionId` によるログ相関
+
+`OnNotification` を使うと、通知種別ごとの簡易メソッドでは受け取れない `ExecutionId` を利用できます。
+同じロードサイクル、または同じステージ実行サイクルの通知を同一 ID で追跡したい場合に有効です。
+
+```csharp
+public sealed class TraceableCallback : IPluginLoaderCallback
+{
+    public void OnNotification(PluginLoaderNotification notification)
+    {
+        Console.WriteLine(
+            $"[ExecutionId={notification.ExecutionId}] " +
+            $"Type={notification.NotificationType}, " +
+            $"PluginId={notification.PluginId}, " +
+            $"StageId={notification.StageId}, " +
+            $"Message={notification.Message}");
+    }
+}
+```
+
+たとえば、`LoadStart` と `LoadCompleted` が同じ `ExecutionId` を持っていれば、
+その 2 つが同じロード処理に属する通知だと判断できます。
+プラグイン単位の `PluginLoadStart` / `PluginLoadRetry` / `PluginLoadFailed` も同じ `ExecutionId` でまとめて追跡できます。
+
+### 5-7. `PluginExecutor` の callback 利用
+
+実行中の進捗や失敗を細かく追跡したい場合は、`IPluginExecutorCallback` を `SetExecutorCallback` で登録します。
+グループ開始・個別プラグイン実行開始・成功・失敗・スキップを受け取れます。
+
+```csharp
+public sealed class MyExecutorCallback : IPluginExecutorCallback
+{
+    public void OnPluginExecuteCompleted(string stageId, string pluginId, int groupIndex)
+        => Console.WriteLine($"[{stageId}] Group={groupIndex} Plugin={pluginId} 実行完了");
+
+    public void OnPluginExecuteFailed(string stageId, string pluginId, int groupIndex, Exception error)
+        => Console.WriteLine($"[{stageId}] Group={groupIndex} Plugin={pluginId} 実行失敗: {error.Message}");
+
+    public void OnPluginSkipped(string stageId, string pluginId, int groupIndex, string skipReason)
+        => Console.WriteLine($"[{stageId}] Group={groupIndex} Plugin={pluginId} スキップ: {skipReason}");
+}
+
+using var loader = new PluginLoader();
+loader.SetExecutorCallback(new MyExecutorCallback());
+```
+
+`IPluginLoaderCallback` はロード中心の通知、`IPluginExecutorCallback` は実行中心の通知として使い分けると整理しやすくなります。
 
 ## 6. PluginContext の使い方
 

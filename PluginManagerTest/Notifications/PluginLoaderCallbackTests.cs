@@ -108,11 +108,52 @@ public class PluginLoaderCallbackTests
         }
     }
 
+    [Fact]
+    public async Task SetCallback_NotificationContainsExecutionId()
+    {
+        // Arrange
+        using var loader = new PluginLoader();
+        var context = new PluginContext();
+        var callback = new TestCallback();
+        loader.SetCallback(callback);
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"test-{Guid.NewGuid()}.json");
+        await File.WriteAllTextAsync(tempFile, """
+        {
+          "PluginsPath": "nonexistent",
+          "IntervalMilliseconds": 0,
+          "TimeoutMilliseconds": 0
+        }
+        """);
+
+        try
+        {
+            // Act
+            await loader.LoadFromConfigurationAsync(tempFile, context);
+
+            // Assert
+            Assert.NotEmpty(callback.Notifications);
+            Assert.All(callback.Notifications, n => Assert.False(string.IsNullOrWhiteSpace(n.ExecutionId)));
+
+            var loadStart = callback.Notifications.First(n => n.NotificationType == PluginLoaderNotificationType.LoadStart);
+            var loadCompleted = callback.Notifications.First(n => n.NotificationType == PluginLoaderNotificationType.LoadCompleted);
+            Assert.Equal(loadStart.ExecutionId, loadCompleted.ExecutionId);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     private class TestCallback : IPluginLoaderCallback
     {
         public bool OnLoadStartCalled { get; private set; }
         public bool OnLoadCompletedCalled { get; private set; }
         public string? LastConfigPath { get; private set; }
+        public List<PluginLoaderNotification> Notifications { get; } = [];
+
+        public void OnNotification(PluginLoaderNotification notification)
+            => Notifications.Add(notification);
 
         public void OnLoadStart(string configurationFilePath)
         {

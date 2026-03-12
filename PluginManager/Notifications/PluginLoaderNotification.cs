@@ -10,7 +10,8 @@ public sealed class PluginLoaderNotification(
     string? stageId = null,
     int? attempt = null,
     string? configurationFilePath = null,
-    Exception? exception = null)
+    Exception? exception = null,
+    string? executionId = null)
 {
     /// <summary>通知の種別を取得します。</summary>
     public PluginLoaderNotificationType NotificationType { get; } = notificationType;
@@ -32,4 +33,7 @@ public sealed class PluginLoaderNotification(
 
     /// <summary>通知に関連する例外を取得します。エラーがない場合は <see langword="null"/>。</summary>
     public Exception? Exception { get; } = exception;
+
+    /// <summary>同一実行サイクルを識別するトレースIDを取得します。未設定の場合は <see langword="null"/>。</summary>
+    public string? ExecutionId { get; } = executionId;
 }

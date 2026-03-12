@@ -1,4 +1,4 @@
-# PluginManager アプリ開発者向け手引書
+﻿# PluginManager アプリ開発者向け手引書
 
 **対象読者**: PluginManager を使って C# / VB アプリを開発する開発者  
 **対象バージョン**: .NET 8 / C# 12
