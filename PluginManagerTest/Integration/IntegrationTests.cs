@@ -40,7 +40,7 @@ public sealed class IntegrationTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         // テスト用ディレクトリを作成
-        _testDirectory = Path.Combine(Path.GetTempPath(), "PluginManagerIntegrationTests", Guid.NewGuid().ToString());
+        _testDirectory = Path.Combine(Path.GetTempPath(), "PluginManagerIntegrationTests", Guid.NewGuid().ToString("N"));
         _pluginsDirectory = Path.Combine(_testDirectory, "plugins");
         Directory.CreateDirectory(_pluginsDirectory);
 

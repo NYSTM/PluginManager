@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 /// <para>
 /// <b>インプロセス隔離と別プロセス隔離</b><br/>
 /// <see cref="PluginLoadContext"/> は同一プロセス内のアセンブリ分離を担当します。
-/// 別プロセス隔離が必要なプラグインは専用ランタイムへ委譲され、現在は明示的に未対応として扱われます。
+/// 別プロセス隔離が必要なプラグインは専用ランタイムへ委譲されます。
 /// </para>
 /// <para>
 /// <b>ALC アンロードと GC について</b><br/>
@@ -24,7 +24,8 @@ using Microsoft.Extensions.Logging;
 /// </para>
 /// <para>
 /// <b>通知方式</b><br/>
-/// ライフサイクル通知を受け取るには <see cref="SetCallback"/>、実行通知を受け取るには <see cref="SetExecutorCallback"/> を設定してください。
+/// ライフサイクル通知を受け取るには <see cref="SetCallback"/>、実行通知を受け取るには <see cref="SetExecutorCallback"/>、
+/// 別プロセス通知を受け取るには <see cref="SetProcessCallback"/> を設定してください。
 /// </para>
 /// </remarks>
 public sealed class PluginLoader : IDisposable, IAsyncDisposable
@@ -34,6 +35,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     private readonly PluginDiscoverer _discoverer;
     private readonly PluginLoaderNotificationPublisher _notificationPublisher;
     private readonly PluginExecutorNotificationPublisher _executorNotificationPublisher;
+    private readonly PluginProcessNotificationPublisher _processNotificationPublisher;
     private readonly IReadOnlyDictionary<PluginIsolationMode, IPluginRuntime> _runtimes;
     private bool _disposed;
     private PluginConfiguration? _lastConfig;
@@ -42,11 +44,12 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     {
         _notificationPublisher = new(logger);
         _executorNotificationPublisher = new(logger);
+        _processNotificationPublisher = new(logger);
         _discoverer = new(logger);
         _runtimes = new Dictionary<PluginIsolationMode, IPluginRuntime>
         {
             [PluginIsolationMode.InProcess] = new InProcessPluginRuntime(logger),
-            [PluginIsolationMode.OutOfProcess] = new OutOfProcessPluginRuntime(),
+            [PluginIsolationMode.OutOfProcess] = new OutOfProcessPluginRuntime(_processNotificationPublisher),
         };
     }
 
@@ -76,6 +79,13 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     /// <param name="callback">通知を受け取るコールバック実装。<see langword="null"/> で解除。</param>
     public void SetExecutorCallback(IPluginExecutorCallback? callback)
         => _executorNotificationPublisher.SetCallback(callback);
+
+    /// <summary>
+    /// 別プロセス実行通知を受け取るコールバックを設定します。
+    /// </summary>
+    /// <param name="callback">通知を受け取るコールバック実装。<see langword="null"/> で解除。</param>
+    public void SetProcessCallback(IPluginProcessCallback? callback)
+        => _processNotificationPublisher.SetCallback(callback);
 
     public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(
         string configurationFilePath, 

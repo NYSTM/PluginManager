@@ -75,7 +75,7 @@ public sealed class PluginConfigurationTests
     public void Load_FileNotFound_ThrowsException()
     {
         // Arrange
-        var nonExistentFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var nonExistentFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
 
         // Act & Assert
         Assert.Throws<FileNotFoundException>(() => PluginConfiguration.Load(nonExistentFile));

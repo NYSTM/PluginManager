@@ -50,7 +50,6 @@ internal sealed class PluginHostClient : IDisposable
         await _sendLock.WaitAsync(cancellationToken);
         try
         {
-            // ロック取得後に再チェック
             if (Volatile.Read(ref _disposed) == 1)
                 throw new ObjectDisposedException(nameof(PluginHostClient));
 
@@ -70,18 +69,29 @@ internal sealed class PluginHostClient : IDisposable
 
                 messageBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
 
-                var message = messageBuilder.ToString();
-                if (!message.EndsWith('\n'))
-                    continue;
+                while (true)
+                {
+                    var accumulated = messageBuilder.ToString();
+                    var newlineIndex = accumulated.IndexOf('\n');
 
-                var response = JsonSerializer.Deserialize<PluginHostResponse>(message.TrimEnd('\n'));
-                if (response is null)
-                    throw new InvalidOperationException("ホストプロセスからの応答が不正です。");
+                    if (newlineIndex < 0)
+                        break;
 
-                if (response.RequestId != request.RequestId)
-                    throw new InvalidOperationException($"応答の RequestId が一致しません。Expected={request.RequestId}, Actual={response.RequestId}");
+                    var message = accumulated[..newlineIndex];
+                    messageBuilder.Remove(0, newlineIndex + 1);
 
-                return response;
+                    if (string.IsNullOrWhiteSpace(message))
+                        continue;
+
+                    var response = JsonSerializer.Deserialize<PluginHostResponse>(message);
+                    if (response is null)
+                        throw new InvalidOperationException("ホストプロセスからの応答が不正です。");
+
+                    if (response.RequestId != request.RequestId)
+                        continue;
+
+                    return response;
+                }
             }
         }
         finally

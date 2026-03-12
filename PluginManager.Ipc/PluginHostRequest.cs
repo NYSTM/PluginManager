@@ -1,11 +1,11 @@
 ﻿using System.Text.Json;
 
-namespace PluginHost;
+namespace PluginManager.Ipc;
 
 /// <summary>
 /// プラグインホストへの要求メッセージを表します。
 /// </summary>
-internal sealed record PluginHostRequest
+public sealed record PluginHostRequest
 {
     /// <summary>要求 ID（応答とのマッチングに使用）。</summary>
     public required string RequestId { get; init; }
@@ -25,6 +25,6 @@ internal sealed record PluginHostRequest
     /// <summary>実行ステージ ID。</summary>
     public string? StageId { get; init; }
 
-    /// <summary>コンテキストデータ（型情報を保持した JSON シリアライズ済み）。</summary>
-    public Dictionary<string, JsonElement>? ContextData { get; init; }
+    /// <summary>コンテキストデータ（JSON 表現を保持したシリアライズ済みデータ）。</summary>
+    public IReadOnlyDictionary<string, JsonElement>? ContextData { get; init; }
 }

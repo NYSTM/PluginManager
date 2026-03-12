@@ -1,5 +1,6 @@
 ﻿namespace PluginManager;
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using PluginManager.Ipc;
 
@@ -8,11 +9,17 @@ using PluginManager.Ipc;
 /// </summary>
 internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
 {
-    private readonly Dictionary<string, PluginHostClient> _clients = new();
-    private readonly Dictionary<string, OutOfProcessPluginProxy> _proxies = new();
-    private readonly object _lock = new();
+    private readonly ConcurrentDictionary<string, PluginHostClient> _clients = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, MemoryMappedNotificationQueue> _notificationQueues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, OutOfProcessPluginProxy> _proxies = new(StringComparer.OrdinalIgnoreCase);
+    private readonly PluginProcessNotificationPublisher? _processNotificationPublisher;
     private readonly SemaphoreSlim _createLock = new(1, 1);
     private bool _disposed;
+
+    public OutOfProcessPluginRuntime(PluginProcessNotificationPublisher? processNotificationPublisher = null)
+    {
+        _processNotificationPublisher = processNotificationPublisher;
+    }
 
     public PluginIsolationMode IsolationMode => PluginIsolationMode.OutOfProcess;
 
@@ -26,10 +33,11 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
         try
         {
             var client = await GetOrCreateClientAsync(descriptor.AssemblyPath, cancellationToken);
+            var notificationQueue = GetNotificationQueue(descriptor.AssemblyPath);
 
             var loadRequest = new PluginHostRequest
             {
-                RequestId = Guid.NewGuid().ToString(),
+                RequestId = Guid.NewGuid().ToString("N"),
                 Command = PluginHostCommand.Load,
                 PluginId = descriptor.Id,
                 AssemblyPath = descriptor.AssemblyPath,
@@ -37,6 +45,7 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             };
 
             var loadResponse = await client.SendRequestAsync(loadRequest, cancellationToken);
+            PublishQueuedNotifications(notificationQueue);
             if (!loadResponse.Success)
             {
                 return new PluginLoadResult(
@@ -47,13 +56,14 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
 
             var initRequest = new PluginHostRequest
             {
-                RequestId = Guid.NewGuid().ToString(),
+                RequestId = Guid.NewGuid().ToString("N"),
                 Command = PluginHostCommand.Initialize,
                 PluginId = descriptor.Id,
                 ContextData = context.ToJsonDictionary(),
             };
 
             var initResponse = await client.SendRequestAsync(initRequest, cancellationToken);
+            PublishQueuedNotifications(notificationQueue);
             if (!initResponse.Success)
             {
                 return new PluginLoadResult(
@@ -65,11 +75,8 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             if (initResponse.ContextData is not null)
                 context.ApplyJsonDictionary(initResponse.ContextData);
 
-            var proxy = new OutOfProcessPluginProxy(descriptor, client);
-            lock (_lock)
-            {
-                _proxies[descriptor.Id] = proxy;
-            }
+            var proxy = new OutOfProcessPluginProxy(descriptor, client, notificationQueue, PublishNotification);
+            _proxies[descriptor.Id] = proxy;
 
             return new PluginLoadResult(descriptor, proxy, null);
         }
@@ -81,34 +88,28 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
 
     public void Unload(string assemblyPath)
     {
-        List<(string id, OutOfProcessPluginProxy proxy)> toRemove;
-        PluginHostClient? clientToDispose = null;
+        var toRemove = _proxies
+            .Where(kv => kv.Value.Descriptor.AssemblyPath.Equals(assemblyPath, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
 
-        lock (_lock)
-        {
-            toRemove = _proxies
-                .Where(kv => kv.Value.Descriptor.AssemblyPath.Equals(assemblyPath, StringComparison.OrdinalIgnoreCase))
-                .Select(kv => (kv.Key, kv.Value))
-                .ToList();
-
-            foreach (var (id, _) in toRemove)
-                _proxies.Remove(id);
-
-            if (_clients.Remove(assemblyPath, out var client))
-                clientToDispose = client;
-        }
+        _clients.TryRemove(assemblyPath, out var clientToDispose);
+        _notificationQueues.TryRemove(assemblyPath, out var notificationQueue);
 
         foreach (var (id, proxy) in toRemove)
         {
+            _proxies.TryRemove(id, out _);
+
             try
             {
                 var request = new PluginHostRequest
                 {
-                    RequestId = Guid.NewGuid().ToString(),
+                    RequestId = Guid.NewGuid().ToString("N"),
                     Command = PluginHostCommand.Unload,
                     PluginId = id,
                 };
                 proxy.Client.SendRequestAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+                PublishQueuedNotifications(notificationQueue);
             }
             catch
             {
@@ -122,10 +123,11 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             {
                 var shutdownRequest = new PluginHostRequest
                 {
-                    RequestId = Guid.NewGuid().ToString(),
+                    RequestId = Guid.NewGuid().ToString("N"),
                     Command = PluginHostCommand.Shutdown,
                 };
                 clientToDispose.SendRequestAsync(shutdownRequest, CancellationToken.None).GetAwaiter().GetResult();
+                PublishQueuedNotifications(notificationQueue);
             }
             catch
             {
@@ -134,41 +136,38 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
 
             clientToDispose.Dispose();
         }
+
+        notificationQueue?.Dispose();
     }
 
     public async Task UnloadAsync(string assemblyPath, CancellationToken cancellationToken = default)
     {
-        List<(string id, OutOfProcessPluginProxy proxy)> toRemove;
-        PluginHostClient? clientToDispose = null;
+        var toRemove = _proxies
+            .Where(kv => kv.Value.Descriptor.AssemblyPath.Equals(assemblyPath, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
 
-        lock (_lock)
-        {
-            toRemove = _proxies.Where(kv => kv.Value.Descriptor.AssemblyPath.Equals(assemblyPath, StringComparison.OrdinalIgnoreCase))
-                .Select(kv => (kv.Key, kv.Value))
-                .ToList();
-
-            foreach (var (id, _) in toRemove)
-                _proxies.Remove(id);
-
-            if (_clients.Remove(assemblyPath, out var client))
-                clientToDispose = client;
-        }
+        _clients.TryRemove(assemblyPath, out var clientToDispose);
+        _notificationQueues.TryRemove(assemblyPath, out var notificationQueue);
 
         foreach (var (id, proxy) in toRemove)
         {
+            _proxies.TryRemove(id, out _);
+
             try
             {
                 var request = new PluginHostRequest
                 {
-                    RequestId = Guid.NewGuid().ToString(),
+                    RequestId = Guid.NewGuid().ToString("N"),
                     Command = PluginHostCommand.Unload,
                     PluginId = id,
                 };
                 await proxy.Client.SendRequestAsync(request, cancellationToken);
+                PublishQueuedNotifications(notificationQueue);
             }
             catch (OperationCanceledException)
             {
-                throw;  // キャンセルは再スロー
+                throw;
             }
             catch
             {
@@ -182,14 +181,15 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             {
                 var shutdownRequest = new PluginHostRequest
                 {
-                    RequestId = Guid.NewGuid().ToString(),
+                    RequestId = Guid.NewGuid().ToString("N"),
                     Command = PluginHostCommand.Shutdown,
                 };
                 await clientToDispose.SendRequestAsync(shutdownRequest, cancellationToken);
+                PublishQueuedNotifications(notificationQueue);
             }
             catch (OperationCanceledException)
             {
-                throw;  // キャンセルは再スロー
+                throw;
             }
             catch
             {
@@ -198,18 +198,17 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
 
             clientToDispose.Dispose();
         }
+
+        notificationQueue?.Dispose();
     }
 
     public void UnloadAll()
     {
-        List<PluginHostClient> clients;
-
-        lock (_lock)
-        {
-            _proxies.Clear();
-            clients = [.. _clients.Values];
-            _clients.Clear();
-        }
+        var clients = _clients.Values.ToList();
+        var notificationQueues = _notificationQueues.Values.ToList();
+        _proxies.Clear();
+        _clients.Clear();
+        _notificationQueues.Clear();
 
         foreach (var client in clients)
         {
@@ -217,7 +216,7 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             {
                 var shutdownRequest = new PluginHostRequest
                 {
-                    RequestId = Guid.NewGuid().ToString(),
+                    RequestId = Guid.NewGuid().ToString("N"),
                     Command = PluginHostCommand.Shutdown,
                 };
                 client.SendRequestAsync(shutdownRequest, CancellationToken.None).GetAwaiter().GetResult();
@@ -228,6 +227,12 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             }
 
             client.Dispose();
+        }
+
+        foreach (var notificationQueue in notificationQueues)
+        {
+            PublishQueuedNotifications(notificationQueue);
+            notificationQueue.Dispose();
         }
     }
 
@@ -243,61 +248,95 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
 
     private async Task<PluginHostClient> GetOrCreateClientAsync(string assemblyPath, CancellationToken cancellationToken)
     {
-        lock (_lock)
-        {
-            if (_clients.TryGetValue(assemblyPath, out var existing) && existing.IsConnected)
-                return existing;
-        }
+        if (_clients.TryGetValue(assemblyPath, out var existing) && existing.IsConnected)
+            return existing;
 
         await _createLock.WaitAsync(cancellationToken);
         try
         {
-            // セマフォ取得後に再チェック（別スレッドが既に作成済みの可能性）
-            lock (_lock)
-            {
-                if (_clients.TryGetValue(assemblyPath, out var existing) && existing.IsConnected)
-                    return existing;
-            }
+            if (_clients.TryGetValue(assemblyPath, out var existing2) && existing2.IsConnected)
+                return existing2;
 
             var pipeName = $"PluginHost_{Guid.NewGuid():N}";
+            var notificationQueueName = $"PluginHostNotify_{Guid.NewGuid():N}";
             var hostPath = FindPluginHostExecutable();
+            var notificationQueue = new MemoryMappedNotificationQueue(notificationQueueName);
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = hostPath,
-                Arguments = pipeName,
+                Arguments = $"{pipeName} {notificationQueueName}",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
 
-            var process = Process.Start(startInfo) ?? throw new InvalidOperationException("PluginHost プロセスの起動に失敗しました。");
-            var client = new PluginHostClient(pipeName, process);
+            Process? process = null;
+            PluginHostClient? client = null;
 
-            await client.ConnectAsync(5000, cancellationToken);
-
-            var pingRequest = new PluginHostRequest
+            try
             {
-                RequestId = Guid.NewGuid().ToString(),
-                Command = PluginHostCommand.Ping,
-            };
-            var pingResponse = await client.SendRequestAsync(pingRequest, cancellationToken);
-            if (!pingResponse.Success)
-                throw new InvalidOperationException("PluginHost プロセスが応答しません。");
+                process = Process.Start(startInfo) ?? throw new InvalidOperationException("PluginHost プロセスの起動に失敗しました。");
+                client = new PluginHostClient(pipeName, process);
 
-            lock (_lock)
-            {
+                await client.ConnectAsync(5000, cancellationToken);
+
+                var pingRequest = new PluginHostRequest
+                {
+                    RequestId = Guid.NewGuid().ToString("N"),
+                    Command = PluginHostCommand.Ping,
+                };
+                var pingResponse = await client.SendRequestAsync(pingRequest, cancellationToken);
+                if (!pingResponse.Success)
+                    throw new InvalidOperationException("PluginHost プロセスが応答しません。");
+
                 _clients[assemblyPath] = client;
-            }
+                _notificationQueues[assemblyPath] = notificationQueue;
+                PublishQueuedNotifications(notificationQueue);
 
-            return client;
+                return client;
+            }
+            catch
+            {
+                client?.Dispose();
+                notificationQueue.Dispose();
+                if (process is not null && !process.HasExited)
+                {
+                    try
+                    {
+                        process.Kill();
+                        process.WaitForExit(1000);
+                    }
+                    catch
+                    {
+                        // プロセス終了失敗は無視
+                    }
+                }
+                process?.Dispose();
+                throw;
+            }
         }
         finally
         {
             _createLock.Release();
         }
     }
+
+    private MemoryMappedNotificationQueue GetNotificationQueue(string assemblyPath)
+        => _notificationQueues[assemblyPath];
+
+    private void PublishQueuedNotifications(MemoryMappedNotificationQueue? notificationQueue)
+    {
+        if (notificationQueue is null)
+            return;
+
+        foreach (var notification in notificationQueue.Drain())
+            PublishNotification(notification);
+    }
+
+    private void PublishNotification(PluginProcessNotification notification)
+        => _processNotificationPublisher?.Publish(notification);
 
     private static string FindPluginHostExecutable()
     {
@@ -324,60 +363,5 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             nameof(NotSupportedException) => new NotSupportedException(message),
             _ => new Exception(message),
         };
-    }
-}
-
-/// <summary>
-/// 別プロセスで実行されるプラグインのプロキシです。
-/// </summary>
-internal sealed class OutOfProcessPluginProxy : IPlugin
-{
-    public PluginDescriptor Descriptor { get; }
-    public PluginHostClient Client { get; }
-
-    public OutOfProcessPluginProxy(PluginDescriptor descriptor, PluginHostClient client)
-    {
-        Descriptor = descriptor;
-        Client = client;
-    }
-
-    public string Id => Descriptor.Id;
-    public string Name => Descriptor.Name;
-    public Version Version => Descriptor.Version;
-    public IReadOnlySet<PluginStage> SupportedStages => Descriptor.SupportedStages;
-
-    public Task InitializeAsync(PluginContext context, CancellationToken cancellationToken = default)
-    {
-        return Task.CompletedTask;
-    }
-
-    public async Task<object?> ExecuteAsync(PluginStage stage, PluginContext context, CancellationToken cancellationToken = default)
-    {
-        var request = new PluginHostRequest
-        {
-            RequestId = Guid.NewGuid().ToString(),
-            Command = PluginHostCommand.Execute,
-            PluginId = Id,
-            StageId = stage.Id,
-            ContextData = context.ToJsonDictionary(),
-        };
-
-        var response = await Client.SendRequestAsync(request, cancellationToken);
-
-        if (!response.Success)
-        {
-            var message = response.ErrorMessage ?? "プラグイン実行エラー";
-            throw response.ErrorType switch
-            {
-                nameof(InvalidOperationException) => new InvalidOperationException(message),
-                nameof(ArgumentException) => new ArgumentException(message),
-                _ => new Exception(message),
-            };
-        }
-
-        if (response.ContextData is not null)
-            context.ApplyJsonDictionary(response.ContextData);
-
-        return response.ResultData;
     }
 }

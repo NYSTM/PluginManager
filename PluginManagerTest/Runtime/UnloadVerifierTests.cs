@@ -47,7 +47,7 @@ public sealed class UnloadVerifierTests
         var context = new PluginContext();
 
         // 簡易的なロードテスト（空のディレクトリ）
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
         try
@@ -95,7 +95,7 @@ public sealed class UnloadVerifierTests
         using var loader = new PluginLoader();
         var context = new PluginContext();
 
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
         try

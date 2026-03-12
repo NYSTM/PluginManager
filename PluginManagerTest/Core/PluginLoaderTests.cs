@@ -14,7 +14,7 @@ public sealed class PluginLoaderTests
     public void Discover_NonExistentDirectory_ReturnsEmptyList()
     {
         var loader = new PluginLoader();
-        var nonExistentPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var nonExistentPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
 
         var result = loader.Discover(nonExistentPath);
 
@@ -36,7 +36,7 @@ public sealed class PluginLoaderTests
     {
         using var loader = new PluginLoader();
         var context = new PluginContext();
-        var nonExistentPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var nonExistentPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
 
         var result = await loader.LoadAsync(nonExistentPath, context);
 
@@ -76,7 +76,7 @@ public sealed class PluginLoaderTests
     public void DiscoverFromConfiguration_ValidConfiguration_ReturnsOrderedList()
     {
         var loader = new PluginLoader();
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
         var tempFile = Path.GetTempFileName();
@@ -112,7 +112,7 @@ public sealed class PluginLoaderTests
     {
         using var loader = new PluginLoader();
         var context = new PluginContext();
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
         var tempFile = Path.GetTempFileName();

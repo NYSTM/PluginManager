@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using PluginManager;
+using PluginManager.Ipc;
 
 namespace PluginHost;
 

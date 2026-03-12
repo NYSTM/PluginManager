@@ -2,6 +2,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using PluginManager.Ipc;
 
 namespace PluginHost;
 
@@ -16,7 +17,7 @@ internal sealed class PipeServer
     private readonly string _pipeName;
     private readonly PluginRequestHandler _handler;
     private readonly SemaphoreSlim _requestSemaphore = new(MaxConcurrentRequests, MaxConcurrentRequests);
-    private readonly ConcurrentBag<Task> _activeTasks = new();
+    private readonly ConcurrentBag<Task> _connectionTasks = new();
 
     public PipeServer(string pipeName, PluginRequestHandler handler)
     {
@@ -31,15 +32,18 @@ internal sealed class PipeServer
     {
         Console.WriteLine($"[PluginHost] 最大同時接続数: {MaxConcurrentClients}, 最大並列リクエスト数: {MaxConcurrentRequests}");
 
-        var tasks = new List<Task>(MaxConcurrentClients);
+        var acceptTasks = new List<Task>(MaxConcurrentClients);
         for (var i = 0; i < MaxConcurrentClients; i++)
         {
             var index = i;
-            tasks.Add(Task.Run(() => RunServerInstanceAsync(index, cancellationToken), cancellationToken));
+            acceptTasks.Add(Task.Run(() => RunServerInstanceAsync(index, cancellationToken), cancellationToken));
         }
 
-        await Task.WhenAll(tasks);
-        Console.WriteLine("[PluginHost] すべてのクライアント接続が終了しました。");
+        await Task.WhenAll(acceptTasks);
+        Console.WriteLine("[PluginHost] すべての受付タスクが終了しました。接続処理の完了を待機中...");
+
+        await WaitForAllConnectionsAsync();
+        Console.WriteLine("[PluginHost] すべての接続処理が終了しました。");
 
         _requestSemaphore.Dispose();
     }
@@ -50,7 +54,7 @@ internal sealed class PipeServer
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await using var server = new NamedPipeServerStream(
+                var server = new NamedPipeServerStream(
                     _pipeName,
                     PipeDirection.InOut,
                     MaxConcurrentClients,
@@ -65,22 +69,28 @@ internal sealed class PipeServer
                 }
                 catch (OperationCanceledException)
                 {
+                    await server.DisposeAsync();
                     break;
                 }
 
                 Console.WriteLine($"[PluginHost#{instanceIndex}] クライアント接続完了");
 
-                _ = Task.Run(async () =>
+                var connectionTask = Task.Run(async () =>
                 {
-                    try
+                    await using (server)
                     {
-                        await ProcessRequestsAsync(server, instanceIndex, cancellationToken);
+                        try
+                        {
+                            await ProcessRequestsAsync(server, instanceIndex, cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[PluginHost#{instanceIndex}] 接続処理エラー: {ex.Message}");
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        Console.Error.WriteLine($"[PluginHost#{instanceIndex}] 接続処理エラー: {ex.Message}");
-                    }
-                }, cancellationToken);
+                }, CancellationToken.None);
+
+                _connectionTasks.Add(connectionTask);
             }
         }
         catch (Exception ex)
@@ -105,39 +115,47 @@ internal sealed class PipeServer
 
                 messageBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
 
-                var message = messageBuilder.ToString();
-                if (!message.EndsWith('\n'))
-                    continue;
-
-                messageBuilder.Clear();
-                var request = JsonSerializer.Deserialize<PluginHostRequest>(message.TrimEnd('\n'));
-                if (request is null)
-                    continue;
-
-                var handlerTask = Task.Run(async () =>
+                while (true)
                 {
-                    await _requestSemaphore.WaitAsync(cancellationToken);
-                    try
+                    var accumulated = messageBuilder.ToString();
+                    var newlineIndex = accumulated.IndexOf('\n');
+
+                    if (newlineIndex < 0)
+                        break;
+
+                    var message = accumulated[..newlineIndex];
+                    messageBuilder.Remove(0, newlineIndex + 1);
+
+                    if (string.IsNullOrWhiteSpace(message))
+                        continue;
+
+                    var request = JsonSerializer.Deserialize<PluginHostRequest>(message);
+                    if (request is null)
+                        continue;
+
+                    var handlerTask = Task.Run(async () =>
                     {
-                        return await _handler.HandleAsync(request, instanceIndex, cancellationToken);
-                    }
-                    finally
+                        await _requestSemaphore.WaitAsync(cancellationToken);
+                        try
+                        {
+                            return await _handler.HandleAsync(request, instanceIndex, cancellationToken);
+                        }
+                        finally
+                        {
+                            _requestSemaphore.Release();
+                        }
+                    }, cancellationToken);
+
+                    var response = await handlerTask;
+                    var responseBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response) + "\n");
+                    await server.WriteAsync(responseBytes, cancellationToken);
+                    await server.FlushAsync(cancellationToken);
+
+                    if (request.Command == PluginHostCommand.Shutdown)
                     {
-                        _requestSemaphore.Release();
+                        Console.WriteLine($"[PluginHost#{instanceIndex}] シャットダウンコマンドを受信");
+                        return;
                     }
-                }, cancellationToken);
-
-                _activeTasks.Add(handlerTask);
-
-                var response = await handlerTask;
-                var responseBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response) + "\n");
-                await server.WriteAsync(responseBytes, cancellationToken);
-                await server.FlushAsync(cancellationToken);
-
-                if (request.Command == PluginHostCommand.Shutdown)
-                {
-                    Console.WriteLine($"[PluginHost#{instanceIndex}] シャットダウンコマンドを受信");
-                    break;
                 }
             }
             catch (OperationCanceledException)
@@ -149,16 +167,20 @@ internal sealed class PipeServer
                 Console.Error.WriteLine($"[PluginHost#{instanceIndex}] 要求処理エラー: {ex.Message}");
             }
         }
-
-        CleanupActiveTasks();
     }
 
-    private void CleanupActiveTasks()
+    private async Task WaitForAllConnectionsAsync()
     {
-        while (_activeTasks.TryTake(out var task))
+        while (_connectionTasks.TryTake(out var task))
         {
-            if (!task.IsCompleted)
-                _activeTasks.Add(task);
+            try
+            {
+                await task;
+            }
+            catch
+            {
+                // 接続処理内で既にログ出力済み
+            }
         }
     }
 }

@@ -18,7 +18,7 @@ namespace PluginHost;
 /// </remarks>
 internal sealed class PluginLoadContext : AssemblyLoadContext
 {
-    private readonly System.Runtime.Loader.AssemblyDependencyResolver _resolver;
+    private readonly AssemblyDependencyResolver _resolver;
 
     /// <summary>
     /// プラグインアセンブリパスを指定してコンテキストを初期化します。

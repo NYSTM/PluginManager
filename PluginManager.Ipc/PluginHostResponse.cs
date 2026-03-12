@@ -1,11 +1,11 @@
 ﻿using System.Text.Json;
 
-namespace PluginHost;
+namespace PluginManager.Ipc;
 
 /// <summary>
 /// プラグインホストからの応答メッセージを表します。
 /// </summary>
-internal sealed record PluginHostResponse
+public sealed record PluginHostResponse
 {
     /// <summary>要求 ID（対応する要求の ID）。</summary>
     public required string RequestId { get; init; }
@@ -20,8 +20,8 @@ internal sealed record PluginHostResponse
     public string? ErrorType { get; init; }
 
     /// <summary>実行結果データ（JSON シリアライズ済み）。</summary>
-    public string? ResultData { get; init; }
+    public JsonElement? ResultData { get; init; }
 
-    /// <summary>更新されたコンテキストデータ（型情報を保持した JSON シリアライズ済み）。</summary>
-    public Dictionary<string, JsonElement>? ContextData { get; init; }
+    /// <summary>更新されたコンテキストデータ（JSON 表現を保持したシリアライズ済みデータ）。</summary>
+    public IReadOnlyDictionary<string, JsonElement>? ContextData { get; init; }
 }

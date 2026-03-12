@@ -64,13 +64,14 @@
 | `PluginRequestHandler` | Ping / Initialize / Execute / Unload コマンドの処理 |
 | `PipeServer` | Named Pipe 接続受付・送受信ループ・並列数制御 |
 
-### 3-5. 型安全なプロセス間コンテキスト転送
+### 3-5. JSON ベースのプロセス間コンテキスト転送
 
 `OutOfProcess` モードでは、`PluginContext` をメインプロセスと `PluginHost` プロセスの間で転送します。  
-現在は `Dictionary<string, JsonElement>` を使うことで、**型情報を保持したまま転送**できます。
+現在は `Dictionary<string, JsonElement>` を使うことで、**JSON 表現を保持したまま転送**できます。
+復元時は `JsonElement.ValueKind` に基づいて一部の基本型を復元しますが、元の CLR 型情報そのものを厳密に保持するわけではありません。
 
 - `.ToJsonDictionary()` — 全プロパティを `Dictionary<string, JsonElement>` に変換
-- `.ApplyJsonDictionary(data)` — 型復元してコンテキストに適用
+- `.ApplyJsonDictionary(data)` — JSON 表現からコンテキストへ適用
 
 ### 3-6. `PluginLoader` と `PluginHost` の採用判断
 
@@ -271,9 +272,10 @@ PluginBase         ← IPlugin の基底クラス（推奨）
 - テストごとに独立ディレクトリを使う
 - CI では DLL 不在時の扱いを明確にする
 
-### 7-6. `IPluginLoaderCallback` によるデバッグ
+### 7-6. callback によるデバッグ
 
-`IPluginLoaderCallback` をロガーに接続することで、ロード・実行の各フェーズを追跡しやすくなります。
+通常のロード・実行通知は `IPluginLoaderCallback`、`PluginExecutor` の進捗通知は `IPluginExecutorCallback` を使います。
+`OutOfProcess` の詳細通知は `IPluginProcessCallback` を使うと、`PluginHost` 起動、別プロセス側のロード・初期化・実行・アンロード・シャットダウン通知を型安全に追跡できます。
 
 ### 7-7. `UnloadVerifier` によるアンロード確認
 

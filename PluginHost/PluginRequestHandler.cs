@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using PluginManager;
+using PluginManager.Ipc;
 
 namespace PluginHost;
 
@@ -11,10 +12,12 @@ internal sealed class PluginRequestHandler
     private const int DefaultExecuteTimeoutSeconds = 300;
 
     private readonly PluginRegistry _registry;
+    private readonly MemoryMappedNotificationQueue? _notificationQueue;
 
-    public PluginRequestHandler(PluginRegistry registry)
+    public PluginRequestHandler(PluginRegistry registry, MemoryMappedNotificationQueue? notificationQueue = null)
     {
         _registry = registry;
+        _notificationQueue = notificationQueue;
     }
 
     /// <summary>
@@ -27,18 +30,61 @@ internal sealed class PluginRequestHandler
             return request.Command switch
             {
                 PluginHostCommand.Ping => new PluginHostResponse { RequestId = request.RequestId, Success = true },
-                PluginHostCommand.Load => _registry.Load(request, instanceIndex),
+                PluginHostCommand.Load => HandleLoad(request, instanceIndex),
                 PluginHostCommand.Initialize => await HandleInitializeAsync(request, instanceIndex, cancellationToken),
                 PluginHostCommand.Execute => await HandleExecuteAsync(request, instanceIndex, cancellationToken),
-                PluginHostCommand.Unload => _registry.Unload(request, instanceIndex),
-                PluginHostCommand.Shutdown => new PluginHostResponse { RequestId = request.RequestId, Success = true },
+                PluginHostCommand.Unload => HandleUnload(request, instanceIndex),
+                PluginHostCommand.Shutdown => HandleShutdown(request),
                 _ => ErrorResponse(request.RequestId, $"不明なコマンド: {request.Command}", nameof(NotSupportedException)),
             };
         }
         catch (Exception ex)
         {
+            PublishNotification(
+                PluginProcessNotificationType.ExecuteFailed,
+                "要求処理中に未処理例外が発生しました。",
+                request,
+                ex.GetType().Name,
+                ex.Message);
             return ErrorResponse(request.RequestId, ex.Message, ex.GetType().Name);
         }
+    }
+
+    private PluginHostResponse HandleLoad(PluginHostRequest request, int instanceIndex)
+    {
+        var response = _registry.Load(request, instanceIndex);
+        PublishNotification(
+            response.Success ? PluginProcessNotificationType.LoadCompleted : PluginProcessNotificationType.LoadFailed,
+            response.Success
+                ? $"プラグイン '{request.PluginId}' のロードが完了しました。"
+                : $"プラグイン '{request.PluginId}' のロードに失敗しました。",
+            request,
+            response.ErrorType,
+            response.ErrorMessage);
+        return response;
+    }
+
+    private PluginHostResponse HandleUnload(PluginHostRequest request, int instanceIndex)
+    {
+        var response = _registry.Unload(request, instanceIndex);
+        PublishNotification(
+            response.Success ? PluginProcessNotificationType.UnloadCompleted : PluginProcessNotificationType.UnloadFailed,
+            response.Success
+                ? $"プラグイン '{request.PluginId}' のアンロードが完了しました。"
+                : $"プラグイン '{request.PluginId}' のアンロードに失敗しました。",
+            request,
+            response.ErrorType,
+            response.ErrorMessage);
+        return response;
+    }
+
+    private PluginHostResponse HandleShutdown(PluginHostRequest request)
+    {
+        PublishNotification(
+            PluginProcessNotificationType.ShutdownReceived,
+            "PluginHost がシャットダウン要求を受信しました。",
+            request);
+        return new PluginHostResponse { RequestId = request.RequestId, Success = true };
     }
 
     private async Task<PluginHostResponse> HandleInitializeAsync(PluginHostRequest request, int instanceIndex, CancellationToken cancellationToken)
@@ -50,6 +96,10 @@ internal sealed class PluginRequestHandler
             return ErrorResponse(request.RequestId, $"プラグイン '{request.PluginId}' がロードされていません。", nameof(InvalidOperationException));
 
         var context = BuildContext(request.ContextData);
+        PublishNotification(
+            PluginProcessNotificationType.InitializeStarted,
+            $"プラグイン '{request.PluginId}' の初期化を開始します。",
+            request);
 
         try
         {
@@ -57,10 +107,30 @@ internal sealed class PluginRequestHandler
         }
         catch (OperationCanceledException)
         {
+            PublishNotification(
+                PluginProcessNotificationType.InitializeFailed,
+                $"プラグイン '{request.PluginId}' の初期化がキャンセルされました。",
+                request,
+                nameof(OperationCanceledException),
+                "初期化がキャンセルされました。");
             return ErrorResponse(request.RequestId, "初期化がキャンセルされました。", nameof(OperationCanceledException));
+        }
+        catch (Exception ex)
+        {
+            PublishNotification(
+                PluginProcessNotificationType.InitializeFailed,
+                $"プラグイン '{request.PluginId}' の初期化に失敗しました。",
+                request,
+                ex.GetType().Name,
+                ex.Message);
+            return ErrorResponse(request.RequestId, ex.Message, ex.GetType().Name);
         }
 
         Console.WriteLine($"[PluginHost#{instanceIndex}] 初期化完了: {request.PluginId}");
+        PublishNotification(
+            PluginProcessNotificationType.InitializeCompleted,
+            $"プラグイン '{request.PluginId}' の初期化が完了しました。",
+            request);
         return new PluginHostResponse
         {
             RequestId = request.RequestId,
@@ -82,35 +152,81 @@ internal sealed class PluginRequestHandler
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(DefaultExecuteTimeoutSeconds));
+        PublishNotification(
+            PluginProcessNotificationType.ExecuteStarted,
+            $"プラグイン '{request.PluginId}' の実行を開始します。",
+            request);
 
         try
         {
             var result = await plugin.ExecuteAsync(stage, context, timeoutCts.Token);
 
             Console.WriteLine($"[PluginHost#{instanceIndex}] 実行完了: {request.PluginId} @ {request.StageId}");
+            PublishNotification(
+                PluginProcessNotificationType.ExecuteCompleted,
+                $"プラグイン '{request.PluginId}' の実行が完了しました。",
+                request);
             return new PluginHostResponse
             {
                 RequestId = request.RequestId,
                 Success = true,
-                ResultData = result?.ToString(),
+                ResultData = result is not null ? JsonSerializer.SerializeToElement(result) : null,
                 ContextData = context.ToJsonDictionary(),
             };
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
+            PublishNotification(
+                PluginProcessNotificationType.ExecuteFailed,
+                $"プラグイン '{request.PluginId}' の実行がタイムアウトしました。",
+                request,
+                nameof(TimeoutException),
+                $"実行が {DefaultExecuteTimeoutSeconds} 秒でタイムアウトしました。");
             return ErrorResponse(request.RequestId, $"実行が {DefaultExecuteTimeoutSeconds} 秒でタイムアウトしました。", nameof(TimeoutException));
         }
         catch (OperationCanceledException)
         {
+            PublishNotification(
+                PluginProcessNotificationType.ExecuteFailed,
+                $"プラグイン '{request.PluginId}' の実行がキャンセルされました。",
+                request,
+                nameof(OperationCanceledException),
+                "実行がキャンセルされました。");
             return ErrorResponse(request.RequestId, "実行がキャンセルされました。", nameof(OperationCanceledException));
         }
         catch (Exception ex)
         {
+            PublishNotification(
+                PluginProcessNotificationType.ExecuteFailed,
+                $"プラグイン '{request.PluginId}' の実行に失敗しました。",
+                request,
+                ex.GetType().Name,
+                ex.Message);
             return ErrorResponse(request.RequestId, $"実行エラー: {ex.Message}", ex.GetType().Name);
         }
     }
 
-    private static PluginContext BuildContext(Dictionary<string, JsonElement>? contextData)
+    private void PublishNotification(
+        PluginProcessNotificationType notificationType,
+        string message,
+        PluginHostRequest request,
+        string? errorType = null,
+        string? errorMessage = null)
+    {
+        _notificationQueue?.Enqueue(new PluginProcessNotification
+        {
+            NotificationType = notificationType,
+            Message = message,
+            RequestId = request.RequestId,
+            PluginId = request.PluginId,
+            StageId = request.StageId,
+            ProcessId = Environment.ProcessId,
+            ErrorType = errorType,
+            ErrorMessage = errorMessage,
+        });
+    }
+
+    private static PluginContext BuildContext(IReadOnlyDictionary<string, JsonElement>? contextData)
     {
         var context = new PluginContext();
         if (contextData is not null)

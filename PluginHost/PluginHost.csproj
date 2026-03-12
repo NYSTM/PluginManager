@@ -25,6 +25,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\PluginManager.Core\PluginManager.Core.csproj" />
+		<ProjectReference Include="..\PluginManager.Ipc\PluginManager.Ipc.csproj" />
 	</ItemGroup>
 
 </Project>

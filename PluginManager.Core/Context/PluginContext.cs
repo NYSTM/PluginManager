@@ -259,7 +259,7 @@ public sealed class PluginContext
     /// 既存キーは上書きされます。型の復元は <see cref="JsonElement.ValueKind"/> に基づきます。
     /// </summary>
     /// <param name="data">適用する辞書。</param>
-    public void ApplyJsonDictionary(Dictionary<string, JsonElement> data)
+    public void ApplyJsonDictionary(IReadOnlyDictionary<string, JsonElement> data)
     {
         foreach (var (key, element) in data)
             Properties[key] = DeserializeJsonElement(element);

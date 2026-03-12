@@ -357,6 +357,33 @@ loader.SetExecutorCallback(new MyExecutorCallback());
 
 `IPluginLoaderCallback` はロード中心の通知、`IPluginExecutorCallback` は実行中心の通知として使い分けると整理しやすくなります。
 
+### 5-8. `OutOfProcess` の process callback 利用
+
+`OutOfProcess` モードの詳細通知を受け取りたい場合は、`IPluginProcessCallback` を `SetProcessCallback` で登録します。
+`PluginHost` 起動、別プロセス側のロード・初期化・実行・アンロード・シャットダウン通知を受け取れます。
+
+```csharp
+using PluginManager.Ipc;
+
+public sealed class MyProcessCallback : IPluginProcessCallback
+{
+    public void OnHostStarted(int processId)
+        => Console.WriteLine($"PluginHost 起動: PID={processId}");
+
+    public void OnExecuteCompleted(string pluginId, string? stageId)
+        => Console.WriteLine($"[{pluginId}] Stage={stageId} 別プロセス実行完了");
+
+    public void OnExecuteFailed(string pluginId, string? stageId, string? errorMessage)
+        => Console.WriteLine($"[{pluginId}] Stage={stageId} 別プロセス実行失敗: {errorMessage}");
+}
+
+using var loader = new PluginLoader();
+loader.SetProcessCallback(new MyProcessCallback());
+```
+
+`OnNotification(PluginProcessNotification notification)` を実装すると、生の通知 DTO をまとめて扱えます。
+別プロセス通知は `IPluginProcessCallback` で受け取る前提です。
+
 ## 6. PluginContext の使い方
 
 ### 6-1. 基本

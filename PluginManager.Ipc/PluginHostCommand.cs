@@ -3,7 +3,7 @@
 /// <summary>
 /// プラグインホストプロセスへの要求種別を表します。
 /// </summary>
-internal enum PluginHostCommand
+public enum PluginHostCommand
 {
     /// <summary>プラグインをロードします。</summary>
     Load = 1,
