@@ -24,14 +24,21 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
     /// </summary>
     /// <param name="configurationFilePath">設定ファイルのパス。</param>
     /// <param name="searchPattern">DLL 検索パターン。既定値は <c>*.dll</c>。</param>
+    /// <param name="cancellationToken">探索のキャンセル通知。</param>
     /// <returns>設定順序で並び替えられた <see cref="PluginDescriptor"/> の一覧。</returns>
-    public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(string configurationFilePath, string searchPattern = "*.dll")
+    public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(
+        string configurationFilePath, 
+        string searchPattern = "*.dll",
+        CancellationToken cancellationToken = default)
     {
         var config = PluginConfigurationLoader.Load(configurationFilePath);
         if (string.IsNullOrWhiteSpace(config.PluginsPath))
             return [];
 
-        return PluginOrderResolver.OrderByConfiguration(Discover(config.PluginsPath, searchPattern), config.StageOrders);
+        return PluginOrderResolver.OrderByConfiguration(
+            Discover(config.PluginsPath, searchPattern, cancellationToken), 
+            config.StageOrders, 
+            config.PluginDependencies);
     }
 
     /// <summary>
@@ -40,10 +47,15 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
     /// </summary>
     /// <param name="directoryPath">探索対象のディレクトリパス。</param>
     /// <param name="searchPattern">DLL 検索パターン。既定値は <c>*.dll</c>。</param>
+    /// <param name="cancellationToken">探索のキャンセル通知。</param>
     /// <returns>発見した <see cref="PluginDescriptor"/> の一覧。</returns>
     /// <exception cref="ArgumentException"><paramref name="directoryPath"/> が空白の場合。</exception>
     /// <exception cref="InvalidOperationException">同じ ID を持つプラグインが複数発見された場合。</exception>
-    public IReadOnlyList<PluginDescriptor> Discover(string directoryPath, string searchPattern = "*.dll")
+    /// <exception cref="OperationCanceledException">キャンセルされた場合。</exception>
+    public IReadOnlyList<PluginDescriptor> Discover(
+        string directoryPath, 
+        string searchPattern = "*.dll",
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(directoryPath))
             throw new ArgumentException("ディレクトリパスが必要です。", nameof(directoryPath));
@@ -56,6 +68,7 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
         // 各ファイルを並列処理し、それぞれのスレッドで独立したリストを作成
         var allDescriptors = files
             .AsParallel()
+            .WithCancellation(cancellationToken)
             .SelectMany(file => DiscoverFromAssembly(file))
             .ToList();
 
@@ -120,7 +133,10 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
                     .ToFrozenSet()
                 : _defaultStages;
 
-            return new PluginDescriptor(attribute.Id, attribute.Name, parsed, pluginType, assemblyPath, stages);
+            return new PluginDescriptor(attribute.Id, attribute.Name, parsed, pluginType.FullName ?? pluginType.Name, assemblyPath, stages)
+            {
+                IsolationMode = attribute.IsolationMode,
+            };
         }
 
         var fallbackVersion = pluginType.Assembly.GetName().Version ?? new Version(1, 0, 0, 0);
@@ -128,7 +144,7 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
             pluginType.FullName ?? pluginType.Name,
             pluginType.Name,
             fallbackVersion,
-            pluginType,
+            pluginType.FullName ?? pluginType.Name,
             assemblyPath,
             _defaultStages);
     }

@@ -29,6 +29,23 @@ public sealed class PluginConfiguration
     private IReadOnlyList<PluginStageOrderEntry> _stageOrders = [];
 
     /// <summary>
+    /// プラグイン間の依存関係定義を取得します。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>依存関係ベースの実行順序:</b><br/>
+    /// この設定により、プラグインの依存関係を明示的に宣言できます。
+    /// トポロジカルソートにより、依存関係を満たす実行順序が自動的に決定されます。
+    /// </para>
+    /// <para>
+    /// <b>Order との併用:</b><br/>
+    /// <see cref="StageOrders"/> で指定された Order は優先され、
+    /// 依存関係は Order が未指定のプラグイン間で適用されます。
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<PluginDependencyEntry> PluginDependencies { get; init; } = [];
+
+    /// <summary>
     /// プラグイン読み込み間の待機時間（ミリ秒）を取得します。<c>0</c> で待機なし。
     /// </summary>
     public int IntervalMilliseconds { get; init; }
@@ -71,6 +88,7 @@ public sealed class PluginConfiguration
         {
             PluginsPath            = Path.GetFullPath(PluginsPath, basePath),
             StageOrders            = StageOrders,
+            PluginDependencies     = PluginDependencies,
             IntervalMilliseconds   = IntervalMilliseconds,
             TimeoutMilliseconds    = TimeoutMilliseconds,
             RetryCount             = RetryCount,

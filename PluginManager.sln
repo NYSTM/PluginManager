@@ -16,9 +16,19 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ソリューション項目", "ソリューション項目", "{2022CB0F-8BAF-F49E-0C48-8EF4C96EC109}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
+		docs\advanced-guide.md = docs\advanced-guide.md
+		docs\developer-guide.md = docs\developer-guide.md
 		LICENSE = LICENSE
 		README.md = README.md
 	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PluginHost", "PluginHost\PluginHost.csproj", "{B3D7FA0D-97C9-8B89-2A18-C441924AD022}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{C3D4E5F6-A7B8-9012-CDEF-123456789012}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -46,9 +56,21 @@ Global
 		{34C3B6AD-25B1-47B5-A6E4-29D99F718C89}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{34C3B6AD-25B1-47B5-A6E4-29D99F718C89}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{34C3B6AD-25B1-47B5-A6E4-29D99F718C89}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B3D7FA0D-97C9-8B89-2A18-C441924AD022}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B3D7FA0D-97C9-8B89-2A18-C441924AD022}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B3D7FA0D-97C9-8B89-2A18-C441924AD022}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B3D7FA0D-97C9-8B89-2A18-C441924AD022}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{F933E4BA-3B43-4B74-B4DA-114ECDB3E520} = {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+		{3F54E4DF-07B0-9732-A2E4-147FC73E725D} = {B2C3D4E5-F6A7-8901-BCDE-F12345678901}
+		{477A090D-B3AE-F5D3-53F5-174EF2D017FB} = {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+		{E2BF04EA-A9D7-BE6C-CB14-C2DE8BBE68A1} = {C3D4E5F6-A7B8-9012-CDEF-123456789012}
+		{34C3B6AD-25B1-47B5-A6E4-29D99F718C89} = {B2C3D4E5-F6A7-8901-BCDE-F12345678901}
+		{B3D7FA0D-97C9-8B89-2A18-C441924AD022} = {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {2A689B5E-F5BA-4789-A714-9BAC19377188}

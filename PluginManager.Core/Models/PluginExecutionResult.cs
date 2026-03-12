@@ -21,6 +21,11 @@ public sealed class PluginExecutionResult
     public Exception? Error { get; }
 
     /// <summary>
+    /// エラー情報を取得します。エラーが発生していない場合は <see langword="null"/>。
+    /// </summary>
+    public PluginErrorInfo? ErrorInfo { get; }
+
+    /// <summary>
     /// プラグインがスキップされたかどうかを取得します。
     /// </summary>
     public bool Skipped { get; }
@@ -49,6 +54,7 @@ public sealed class PluginExecutionResult
         Descriptor = descriptor;
         Value = value;
         Error = error;
+        ErrorInfo = error is not null ? PluginErrorInfo.ExecutionFailure(error) : null;
         Skipped = false;
         SkipReason = null;
     }
@@ -61,6 +67,7 @@ public sealed class PluginExecutionResult
         Descriptor = descriptor;
         Value = null;
         Error = null;
+        ErrorInfo = null;
         Skipped = true;
         SkipReason = skipReason;
     }

@@ -6,6 +6,12 @@
 public sealed record PluginDescriptor(string Id,
                                       string Name,
                                       Version Version,
-                                      Type PluginType,
+                                      string PluginTypeName,
                                       string AssemblyPath,
-                                      IReadOnlySet<PluginStage> SupportedStages);
+                                      IReadOnlySet<PluginStage> SupportedStages)
+{
+    /// <summary>
+    /// プラグインの隔離方式を取得します。
+    /// </summary>
+    public PluginIsolationMode IsolationMode { get; init; } = PluginIsolationMode.InProcess;
+}

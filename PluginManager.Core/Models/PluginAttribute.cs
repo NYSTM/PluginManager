@@ -37,4 +37,10 @@ public sealed class PluginAttribute : Attribute
 
     /// <summary>サポートするステージIDの一覧を取得します。</summary>
     public string[] SupportedStageIds { get; }
+
+    /// <summary>
+    /// プラグインの隔離方式を取得または設定します。
+    /// 既定値は同一プロセス内の ALC 分離です。
+    /// </summary>
+    public PluginIsolationMode IsolationMode { get; set; } = PluginIsolationMode.InProcess;
 }

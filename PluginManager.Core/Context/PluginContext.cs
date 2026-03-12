@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace PluginManager;
 
@@ -30,10 +31,19 @@ public sealed class PluginContext
     /// <param name="key">プロパティキー。</param>
     /// <returns>値が存在し型が一致する場合はその値。それ以外は既定値。</returns>
     /// <remarks>
-    /// キーが存在しない場合と型が不一致の場合を区別したい場合は <see cref="TryGetProperty{T}"/> を使用してください。
+    /// キーが存在しない場合と型が不一致の場合を区別したい場合は <see cref="TryGetProperty{T}(string, out T)"/> を使用してください。
     /// </remarks>
     public T? GetProperty<T>(string key)
         => TryGetProperty<T>(key, out var value) ? value : default;
+
+    /// <summary>
+    /// 型安全なキーを使用して値を取得します。
+    /// </summary>
+    /// <typeparam name="T">取得する値の型。</typeparam>
+    /// <param name="key">型安全なコンテキストキー。</param>
+    /// <returns>値が存在し型が一致する場合はその値。それ以外は既定値。</returns>
+    public T? GetProperty<T>(ContextKey<T> key)
+        => GetProperty<T>(key.Name);
 
     /// <summary>
     /// 指定キーの値を型付きで取得を試みます。
@@ -83,6 +93,16 @@ public sealed class PluginContext
     }
 
     /// <summary>
+    /// 型安全なキーを使用して値の取得を試みます。
+    /// </summary>
+    /// <typeparam name="T">取得する値の型。</typeparam>
+    /// <param name="key">型安全なコンテキストキー。</param>
+    /// <param name="value">取得に成功した場合は値、失敗した場合は既定値。</param>
+    /// <returns>キーが存在し型が一致する場合は <see langword="true"/>。それ以外は <see langword="false"/>。</returns>
+    public bool TryGetProperty<T>(ContextKey<T> key, out T? value)
+        => TryGetProperty(key.Name, out value);
+
+    /// <summary>
     /// 指定キーの値を型付きで取得します。取得に失敗した場合は指定されたデフォルト値を返します。
     /// </summary>
     /// <typeparam name="T">取得する値の型。</typeparam>
@@ -97,6 +117,16 @@ public sealed class PluginContext
     /// </example>
     public T GetPropertyOrDefault<T>(string key, T defaultValue)
         => TryGetProperty<T>(key, out var value) ? value! : defaultValue;
+
+    /// <summary>
+    /// 型安全なキーを使用して値を取得します。取得に失敗した場合は指定されたデフォルト値を返します。
+    /// </summary>
+    /// <typeparam name="T">取得する値の型。</typeparam>
+    /// <param name="key">型安全なコンテキストキー。</param>
+    /// <param name="defaultValue">取得に失敗した場合のデフォルト値。</param>
+    /// <returns>値が存在し型が一致する場合はその値。それ以外はデフォルト値。</returns>
+    public T GetPropertyOrDefault<T>(ContextKey<T> key, T defaultValue)
+        => GetPropertyOrDefault(key.Name, defaultValue);
 
     /// <summary>
     /// 指定キーの値を型付きで取得します。キーが存在しない場合や型が不一致の場合は例外をスローします。
@@ -146,11 +176,38 @@ public sealed class PluginContext
     }
 
     /// <summary>
+    /// 型安全なキーを使用して値を取得します。キーが存在しない場合や型が不一致の場合は例外をスローします。
+    /// </summary>
+    /// <typeparam name="T">取得する値の型。</typeparam>
+    /// <param name="key">型安全なコンテキストキー。</param>
+    /// <returns>指定した型の値。</returns>
+    /// <exception cref="KeyNotFoundException">指定キーが存在しない場合。</exception>
+    /// <exception cref="InvalidCastException">値の型が T に変換できない場合。</exception>
+    public T GetPropertyOrThrow<T>(ContextKey<T> key)
+        => GetPropertyOrThrow<T>(key.Name);
+
+    /// <summary>
     /// 指定キーに値を設定します。キーが既に存在する場合は上書きします。
     /// </summary>
     /// <param name="key">プロパティキー。</param>
     /// <param name="value">設定する値。</param>
     public void SetProperty(string key, object? value) => Properties[key] = value;
+
+    /// <summary>
+    /// 型安全なキーを使用して値を設定します。キーが既に存在する場合は上書きします。
+    /// </summary>
+    /// <typeparam name="T">設定する値の型。</typeparam>
+    /// <param name="key">型安全なコンテキストキー。</param>
+    /// <param name="value">設定する値。</param>
+    public void SetProperty<T>(ContextKey<T> key, T value)
+        => SetProperty(key.Name, value);
+
+    /// <summary>
+    /// すべてのコンテキストプロパティを取得します。
+    /// </summary>
+    /// <returns>キーと値のペアのコレクション。</returns>
+    public IEnumerable<KeyValuePair<string, object?>> GetAllProperties()
+        => Properties;
 
     /// <summary>
     /// 指定キーのプロパティを削除します。
@@ -160,6 +217,15 @@ public sealed class PluginContext
     /// <param name="key">削除するプロパティキー。</param>
     /// <returns>キーが存在し削除に成功した場合は <see langword="true"/>。それ以外は <see langword="false"/>。</returns>
     public bool RemoveProperty(string key) => Properties.TryRemove(key, out _);
+
+    /// <summary>
+    /// 型安全なキーを使用してプロパティを削除します。
+    /// </summary>
+    /// <typeparam name="T">削除する値の型。</typeparam>
+    /// <param name="key">型安全なコンテキストキー。</param>
+    /// <returns>キーが存在し削除に成功した場合は <see langword="true"/>。それ以外は <see langword="false"/>。</returns>
+    public bool RemoveProperty<T>(ContextKey<T> key)
+        => RemoveProperty(key.Name);
 
     /// <summary>
     /// すべてのプロパティを削除します。
@@ -174,4 +240,41 @@ public sealed class PluginContext
     /// <returns>プロパティのスナップショットを持つ新しい <see cref="PluginContext"/>。</returns>
     public PluginContext CreateScope()
         => new(new Dictionary<string, object?>(Properties, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// すべてのプロパティを <see cref="JsonElement"/> 値の辞書に変換します。
+    /// プロセス間通信で型情報を保持したまま転送する際に使用します。
+    /// </summary>
+    /// <returns>キーと <see cref="JsonElement"/> 値のペアの辞書。</returns>
+    public Dictionary<string, JsonElement> ToJsonDictionary()
+    {
+        var result = new Dictionary<string, JsonElement>(Properties.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in Properties)
+            result[key] = JsonSerializer.SerializeToElement(value);
+        return result;
+    }
+
+    /// <summary>
+    /// <see cref="JsonElement"/> 値の辞書をコンテキストに適用します。
+    /// 既存キーは上書きされます。型の復元は <see cref="JsonElement.ValueKind"/> に基づきます。
+    /// </summary>
+    /// <param name="data">適用する辞書。</param>
+    public void ApplyJsonDictionary(Dictionary<string, JsonElement> data)
+    {
+        foreach (var (key, element) in data)
+            Properties[key] = DeserializeJsonElement(element);
+    }
+
+    private static object? DeserializeJsonElement(JsonElement element)
+        => element.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number when element.TryGetInt32(out var i) => i,
+            JsonValueKind.Number when element.TryGetInt64(out var l) => l,
+            JsonValueKind.Number => element.GetDouble(),
+            JsonValueKind.String => element.GetString(),
+            _ => element.Deserialize<object?>(),
+        };
 }

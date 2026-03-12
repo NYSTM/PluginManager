@@ -1,7 +1,6 @@
 ﻿namespace PluginManager;
 
 using Microsoft.Extensions.Logging;
-using PluginManager;
 
 /// <summary>
 /// プラグインのロード・実行・アンロードを管理するメインクラスです。
@@ -13,9 +12,13 @@ using PluginManager;
 /// GC 完了まで待機したい場合（再ロード前など）は <see cref="DisposeAsync"/> を使用してください。
 /// </para>
 /// <para>
+/// <b>インプロセス隔離と別プロセス隔離</b><br/>
+/// <see cref="PluginLoadContext"/> は同一プロセス内のアセンブリ分離を担当します。
+/// 別プロセス隔離が必要なプラグインは専用ランタイムへ委譲され、現在は明示的に未対応として扱われます。
+/// </para>
+/// <para>
 /// <b>ALC アンロードと GC について</b><br/>
-/// <see cref="Dispose"/> または <see cref="DisposeAsync"/> を呼び出した後、
-/// ALC（AssemblyLoadContext）が実際にメモリから回収されるには、
+/// インプロセスで読み込まれたプラグインは、<see cref="Dispose"/> または <see cref="DisposeAsync"/> を呼び出した後、
 /// 呼び出し元が <see cref="PluginLoadResult"/> のリストへの参照を手放す必要があります。
 /// <see cref="IPlugin"/> インスタンスへの強参照が残っている限り、ALC は GC されません。
 /// </para>
@@ -26,16 +29,21 @@ using PluginManager;
 /// </remarks>
 public sealed class PluginLoader : IDisposable, IAsyncDisposable
 {
-    private readonly Dictionary<string, PluginLoadContext> _loadContexts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _lock = new();
     private readonly PluginDiscoverer _discoverer;
     private readonly PluginLoaderNotificationPublisher _notificationPublisher;
+    private readonly IReadOnlyDictionary<PluginIsolationMode, IPluginRuntime> _runtimes;
     private bool _disposed;
+    private PluginConfiguration? _lastConfig;
 
     public PluginLoader(ILogger<PluginLoader>? logger = null)
     {
         _notificationPublisher = new(logger);
         _discoverer = new(logger);
+        _runtimes = new Dictionary<PluginIsolationMode, IPluginRuntime>
+        {
+            [PluginIsolationMode.InProcess] = new InProcessPluginRuntime(logger),
+            [PluginIsolationMode.OutOfProcess] = new OutOfProcessPluginRuntime(),
+        };
     }
 
     /// <summary>
@@ -58,11 +66,17 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     public void SetCallback(IPluginLoaderCallback? callback)
         => _notificationPublisher.SetCallback(callback);
 
-    public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(string configurationFilePath, string searchPattern = "*.dll")
-        => _discoverer.DiscoverFromConfiguration(configurationFilePath, searchPattern);
+    public IReadOnlyList<PluginDescriptor> DiscoverFromConfiguration(
+        string configurationFilePath, 
+        string searchPattern = "*.dll",
+        CancellationToken cancellationToken = default)
+        => _discoverer.DiscoverFromConfiguration(configurationFilePath, searchPattern, cancellationToken);
 
-    public IReadOnlyList<PluginDescriptor> Discover(string directoryPath, string searchPattern = "*.dll")
-        => _discoverer.Discover(directoryPath, searchPattern);
+    public IReadOnlyList<PluginDescriptor> Discover(
+        string directoryPath, 
+        string searchPattern = "*.dll",
+        CancellationToken cancellationToken = default)
+        => _discoverer.Discover(directoryPath, searchPattern, cancellationToken);
 
     public async Task<IReadOnlyList<PluginLoadResult>> LoadFromConfigurationAsync(
         string configurationFilePath,
@@ -76,11 +90,13 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
             configurationFilePath: configurationFilePath);
 
         var config = PluginConfigurationLoader.Load(configurationFilePath);
+        _lastConfig = config;
+
         if (string.IsNullOrWhiteSpace(config.PluginsPath))
             return [];
 
         var descriptors = _discoverer.Discover(config.PluginsPath, searchPattern);
-        var groups = PluginOrderResolver.BuildExecutionGroups(descriptors, config.StageOrders);
+        var groups = PluginOrderResolver.BuildExecutionGroups(descriptors, config.StageOrders, config.PluginDependencies);
         var results = new List<PluginLoadResult>(descriptors.Count);
 
         foreach (var group in groups)
@@ -124,14 +140,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     /// <param name="assemblyPath">アンロードするプラグインのアセンブリパス。</param>
     public void UnloadPlugin(string assemblyPath)
     {
-        var ctx = RemoveContext(assemblyPath);
-        if (ctx is null)
-            return;
-
-        ctx.Unload();
-        // Fire-and-forget: 呼び出し元が参照を解放次第 GC が ALC を回収する
-        // 完了を保証したい場合は UnloadPluginAsync を使用すること
-        _ = Task.Run(ForceCollect);
+        foreach (var runtime in _runtimes.Values)
+            runtime.Unload(assemblyPath);
     }
 
     /// <summary>
@@ -140,16 +150,19 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     /// 手放してからこのメソッドを呼び出してください。
     /// </summary>
     /// <param name="assemblyPath">アンロードするプラグインのアセンブリパス。</param>
-    public async Task UnloadPluginAsync(string assemblyPath)
+    /// <param name="cancellationToken">アンロード処理のキャンセル通知。</param>
+    public async Task UnloadPluginAsync(string assemblyPath, CancellationToken cancellationToken = default)
     {
-        var ctx = RemoveContext(assemblyPath);
-        if (ctx is null)
-            return;
-
-        ctx.Unload();
-        await Task.Run(ForceCollect);
+        foreach (var runtime in _runtimes.Values)
+            await runtime.UnloadAsync(assemblyPath, cancellationToken);
     }
 
+    /// <summary>
+    /// ロード済みプラグインを指定ステージで実行します。
+    /// <see cref="LoadFromConfigurationAsync"/> でロードした場合は設定の Order に従い、
+    /// 同一 Order のプラグインを並列・異なる Order のプラグインを逐次実行します。
+    /// <see cref="LoadAsync"/> でロードした場合はすべてのプラグインを並列実行します。
+    /// </summary>
     public Task<IReadOnlyList<PluginExecutionResult>> ExecutePluginsAndWaitAsync(
         IReadOnlyList<PluginLoadResult> loadResults,
         PluginStage stage,
@@ -157,7 +170,9 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         PublishNotification(PluginLoaderNotificationType.ExecuteStart, "プラグイン実行を開始します。", stageId: stage.Id);
-        var task = PluginExecutor.ExecutePluginsAndWaitAsync(loadResults, stage, context, cancellationToken);
+        var task = BuildExecutionGroupsForResults(loadResults) is { Count: > 0 } groups
+            ? PluginExecutor.ExecutePluginsInGroupsAsync(groups, stage, context, cancellationToken)
+            : PluginExecutor.ExecutePluginsAndWaitAsync(loadResults, stage, context, cancellationToken);
         return CompleteExecuteAsync(task, stage.Id);
     }
 
@@ -199,92 +214,31 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
 
     private async Task<PluginLoadResult> LoadPluginAsync(PluginDescriptor descriptor, PluginContext context, CancellationToken cancellationToken)
     {
-        PluginLoadContext? loadContext = null;
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            loadContext = new PluginLoadContext(descriptor.AssemblyPath);
-
-            lock (_lock)
-            {
-                if (_loadContexts.TryGetValue(descriptor.AssemblyPath, out var old))
-                    old.Unload();
-                _loadContexts[descriptor.AssemblyPath] = loadContext;
-            }
-
-            var assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(descriptor.AssemblyPath));
-            var type = assembly.GetType(descriptor.PluginType.FullName ?? descriptor.PluginType.Name);
-            if (type is null || Activator.CreateInstance(type) is not IPlugin plugin)
-            {
-                RemoveContext(descriptor.AssemblyPath, loadContext);
-                return new PluginLoadResult(
-                    descriptor,
-                    null,
-                    new InvalidOperationException($"型 '{descriptor.PluginType.FullName}' は有効なプラグインではありません。"));
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            await plugin.InitializeAsync(context, cancellationToken);
-            return new PluginLoadResult(descriptor, plugin, null);
+            var runtime = GetRuntime(descriptor.IsolationMode);
+            return await runtime.LoadAsync(descriptor, context, cancellationToken);
         }
         catch (Exception ex)
         {
-            RemoveContext(descriptor.AssemblyPath, loadContext);
             return new PluginLoadResult(descriptor, null, ex);
         }
     }
 
-    private void RemoveContext(string assemblyPath, PluginLoadContext? loadContext)
+    private IPluginRuntime GetRuntime(PluginIsolationMode isolationMode)
     {
-        lock (_lock)
-        {
-            if (loadContext is not null &&
-                _loadContexts.TryGetValue(assemblyPath, out var current) &&
-                ReferenceEquals(current, loadContext))
-            {
-                _loadContexts.Remove(assemblyPath);
-            }
-        }
+        if (_runtimes.TryGetValue(isolationMode, out var runtime))
+            return runtime;
 
-        loadContext?.Unload();
+        throw new InvalidOperationException($"隔離モード '{isolationMode}' に対応するランタイムが見つかりません。");
     }
 
-    /// <summary>
-    /// 指定パスの <see cref="PluginLoadContext"/> を辞書から取り出します。
-    /// </summary>
-    private PluginLoadContext? RemoveContext(string assemblyPath)
-    {
-        lock (_lock)
-        {
-            if (_loadContexts.TryGetValue(assemblyPath, out var ctx))
-            {
-                _loadContexts.Remove(assemblyPath);
-                return ctx;
-            }
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// すべての <see cref="PluginLoadContext"/> を辞書から取り出して Unload します。
-    /// </summary>
     private void UnloadAllContexts()
     {
-        List<PluginLoadContext> contexts;
-        lock (_lock)
-        {
-            contexts = [.. _loadContexts.Values];
-            _loadContexts.Clear();
-        }
-
-        foreach (var ctx in contexts)
-            ctx.Unload();
+        foreach (var runtime in _runtimes.Values)
+            runtime.UnloadAll();
     }
 
-    /// <summary>
-    /// GC を強制的に 2 サイクル実行して ALC の回収を促します。
-    /// 必ず UI スレッド以外（Task.Run 経由）から呼び出してください。
-    /// </summary>
     private static void ForceCollect()
     {
         GC.Collect();
@@ -324,8 +278,8 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         return await RetryHelper.ExecuteWithRetryAsync(
             operation: async ct => await LoadPluginWithTimeoutAsync(descriptor, context, timeoutMilliseconds, ct),
             isSuccess: r => r.Success,
-            isPermanentError: r => r.Error is InvalidOperationException,
-            timeoutMilliseconds: 0, // タイムアウトは LoadPluginWithTimeoutAsync 内で処理済み
+            isPermanentError: r => r.Error is InvalidOperationException or NotSupportedException,
+            timeoutMilliseconds: 0,
             retryCount: retryCount,
             retryDelayMilliseconds: retryDelayMilliseconds,
             cancellationToken: cancellationToken,
@@ -358,7 +312,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
             {
                 var reason = cancellationToken.IsCancellationRequested
                     ? "キャンセルによりプラグインロードを中断しました。"
-                    : result.Error is InvalidOperationException
+                    : result.Error is InvalidOperationException or NotSupportedException
                         ? "恒久的エラーによりプラグインロードに失敗しました。"
                         : "リトライ上限に到達しプラグインロードに失敗しました。";
 
@@ -383,17 +337,16 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeoutMilliseconds);
 
-        try
-        {
-            return await LoadPluginAsync(descriptor, context, cts.Token);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        var result = await LoadPluginAsync(descriptor, context, cts.Token);
+        if (result.Error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             return new PluginLoadResult(
                 descriptor,
                 null,
                 new TimeoutException($"プラグイン '{descriptor.Name}' が {timeoutMilliseconds}ms でタイムアウトしました。"));
         }
+
+        return result;
     }
 
     private async Task<IReadOnlyList<PluginExecutionResult>> CompleteExecuteAsync(Task<IReadOnlyList<PluginExecutionResult>> executeTask, string stageId)
@@ -409,6 +362,34 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
             PublishNotification(PluginLoaderNotificationType.ExecuteFailed, "プラグイン実行中にエラーが発生しました。", stageId: stageId, exception: ex);
             throw;
         }
+    }
+
+    /// <summary>
+    /// キャッシュ済み設定を使用して <paramref name="loadResults"/> を Order グループに分割します。
+    /// 設定がない場合は <see langword="null"/> を返します。
+    /// </summary>
+    private IReadOnlyList<IReadOnlyList<PluginLoadResult>>? BuildExecutionGroupsForResults(
+        IReadOnlyList<PluginLoadResult> loadResults)
+    {
+        if (_lastConfig is null ||
+            (_lastConfig.StageOrders.Count == 0 && _lastConfig.PluginDependencies.Count == 0))
+            return null;
+
+        var descriptors = loadResults.Select(r => r.Descriptor).ToList();
+        var orderedGroups = PluginOrderResolver.BuildExecutionGroups(
+            descriptors,
+            _lastConfig.StageOrders,
+            _lastConfig.PluginDependencies);
+
+        // PluginDescriptor.Id をキーに loadResults を高速ルックアップ
+        var resultById = loadResults.ToLookup(r => r.Descriptor.Id, StringComparer.OrdinalIgnoreCase);
+
+        return orderedGroups
+            .Select(group => (IReadOnlyList<PluginLoadResult>)group
+                .SelectMany(d => resultById[d.Id])
+                .ToList())
+            .Where(g => g.Count > 0)
+            .ToList();
     }
 
     private void PublishNotification(PluginLoaderNotificationType notificationType, string message, string? pluginId = null, string? stageId = null, int? attempt = null, string? configurationFilePath = null, Exception? exception = null)

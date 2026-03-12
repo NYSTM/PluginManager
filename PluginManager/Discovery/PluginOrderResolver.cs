@@ -5,19 +5,33 @@ namespace PluginManager;
 /// <summary>
 /// 設定に基づきプラグインの実行順序を解決します。
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Order ベースと依存関係ベースの統合:</b><br/>
+/// - <see cref="PluginConfiguration.PluginDependencies"/> が指定されている場合、依存関係を考慮した実行順序を決定します。<br/>
+/// - <see cref="PluginConfiguration.StageOrders"/> で明示的に指定された Order は優先されます。<br/>
+/// - 循環依存が検出された場合、起動時に例外をスローします。
+/// </para>
+/// </remarks>
 internal static class PluginOrderResolver
 {
     /// <summary>
-    /// 設定順序に従いプラグインを並べ替えます。
-    /// ステージ別設定でプラグインの <see cref="PluginDescriptor.SupportedStages"/> と順序を上書きします。
+    /// 設定順序と依存関係に従いプラグインを並べ替えます。
     /// </summary>
     /// <param name="descriptors">探索済みプラグイン記述子の一覧。</param>
     /// <param name="stageOrders">設定ファイルから読み込んだステージ順序定義。</param>
+    /// <param name="dependencies">プラグイン間の依存関係定義。</param>
     /// <returns>Order 昇順・同順位は名前昇順で並んだ <see cref="PluginDescriptor"/> の一覧。</returns>
     public static IReadOnlyList<PluginDescriptor> OrderByConfiguration(
         IReadOnlyList<PluginDescriptor> descriptors,
-        IReadOnlyList<PluginStageOrderEntry> stageOrders)
+        IReadOnlyList<PluginStageOrderEntry> stageOrders,
+        IReadOnlyList<PluginDependencyEntry> dependencies)
     {
+        if (dependencies.Count > 0)
+        {
+            return PluginDependencyResolver.ResolveExecutionOrder(descriptors, dependencies, stageOrders);
+        }
+
         if (stageOrders.Count == 0)
             return descriptors;
 
@@ -36,23 +50,25 @@ internal static class PluginOrderResolver
     }
 
     /// <summary>
-    /// 設定順序からプラグインの並列実行グループを構築します。
-    /// 同一 Order 値のプラグインは並列実行対象として同一グループにまとめられます。
-    /// ステージ別設定でプラグインの <see cref="PluginDescriptor.SupportedStages"/> と順序を上書きします。
+    /// 設定順序と依存関係からプラグインの並列実行グループを構築します。
     /// </summary>
     /// <param name="descriptors">探索済みプラグイン記述子の一覧。</param>
     /// <param name="stageOrders">設定ファイルから読み込んだステージ順序定義。</param>
+    /// <param name="dependencies">プラグイン間の依存関係定義。</param>
     /// <returns>Order 昇順にグループ化された <see cref="PluginDescriptor"/> のリスト。各グループ内は名前昇順。</returns>
     public static IReadOnlyList<IReadOnlyList<PluginDescriptor>> BuildExecutionGroups(
         IReadOnlyList<PluginDescriptor> descriptors,
-        IReadOnlyList<PluginStageOrderEntry> stageOrders)
+        IReadOnlyList<PluginStageOrderEntry> stageOrders,
+        IReadOnlyList<PluginDependencyEntry> dependencies)
     {
-        if (stageOrders.Count == 0)
-            return [descriptors];
+        var ordered = OrderByConfiguration(descriptors, stageOrders, dependencies);
+
+        if (stageOrders.Count == 0 && dependencies.Count == 0)
+            return [ordered];
 
         var stageLookup = BuildStageLookup(stageOrders);
 
-        return descriptors
+        return ordered
             .Select(d =>
             {
                 var (stages, order) = ResolveStagedOrder(d, stageLookup);

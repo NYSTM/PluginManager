@@ -29,6 +29,37 @@ public static class PluginExecutor
     }
 
     /// <summary>
+    /// Order グループ化された <see cref="PluginLoadResult"/> を順次・並列で実行します。
+    /// 同一グループ内のプラグインは並列実行し、グループ間は前グループの完了後に次グループを開始します。
+    /// </summary>
+    /// <param name="groups">
+    /// Order 昇順に並んだロード結果のグループ一覧。
+    /// 同一 Order のプラグインを同一グループにまとめてください。
+    /// </param>
+    /// <param name="stage">実行するライフサイクルステージ。</param>
+    /// <param name="context">実行コンテキスト。プラグイン間でデータを共有します。</param>
+    /// <param name="cancellationToken">キャンセル通知。</param>
+    /// <returns>
+    /// 各プラグインの <see cref="PluginExecutionResult"/> リスト。
+    /// グループ順・グループ内の入力順に並びます。
+    /// </returns>
+    public static async Task<IReadOnlyList<PluginExecutionResult>> ExecutePluginsInGroupsAsync(
+        IReadOnlyList<IReadOnlyList<PluginLoadResult>> groups,
+        PluginStage stage,
+        PluginContext context,
+        CancellationToken cancellationToken = default)
+    {
+        var all = new List<PluginExecutionResult>();
+        foreach (var group in groups)
+        {
+            var tasks = group.Select(r => ExecuteOrSkipAsync(r, stage, context, cancellationToken));
+            var results = await Task.WhenAll(tasks);
+            all.AddRange(results);
+        }
+        return all;
+    }
+
+    /// <summary>
     /// プラグインを実行するか、条件に応じてスキップします。
     /// </summary>
     private static async Task<PluginExecutionResult> ExecuteOrSkipAsync(

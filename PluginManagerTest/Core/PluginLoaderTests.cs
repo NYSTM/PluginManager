@@ -1,4 +1,5 @@
 ﻿using System.Collections.Frozen;
+using System.Reflection;
 using PluginManager;
 using Xunit;
 
@@ -12,14 +13,11 @@ public sealed class PluginLoaderTests
     [Fact]
     public void Discover_NonExistentDirectory_ReturnsEmptyList()
     {
-        // Arrange
         var loader = new PluginLoader();
         var nonExistentPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
 
-        // Act
         var result = loader.Discover(nonExistentPath);
 
-        // Assert
         Assert.NotNull(result);
         Assert.Empty(result);
     }
@@ -27,10 +25,8 @@ public sealed class PluginLoaderTests
     [Fact]
     public void Discover_EmptyPath_ThrowsException()
     {
-        // Arrange
         var loader = new PluginLoader();
 
-        // Act & Assert
         Assert.Throws<ArgumentException>(() => loader.Discover(string.Empty));
         Assert.Throws<ArgumentException>(() => loader.Discover(null!));
     }
@@ -38,15 +34,12 @@ public sealed class PluginLoaderTests
     [Fact]
     public async Task Load_NonExistentDirectory_ReturnsEmptyList()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
         var nonExistentPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
 
-        // Act
         var result = await loader.LoadAsync(nonExistentPath, context);
 
-        // Assert
         Assert.NotNull(result);
         Assert.Empty(result);
     }
@@ -54,7 +47,6 @@ public sealed class PluginLoaderTests
     [Fact]
     public async Task LoadFromConfiguration_NonExistentPluginsPath_ReturnsEmptyList()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
         var tempFile = Path.GetTempFileName();
@@ -69,10 +61,8 @@ public sealed class PluginLoaderTests
 
         try
         {
-            // Act
             var result = await loader.LoadFromConfigurationAsync(tempFile, context);
 
-            // Assert
             Assert.NotNull(result);
             Assert.Empty(result);
         }
@@ -85,7 +75,6 @@ public sealed class PluginLoaderTests
     [Fact]
     public void DiscoverFromConfiguration_ValidConfiguration_ReturnsOrderedList()
     {
-        // Arrange
         var loader = new PluginLoader();
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(tempDir);
@@ -106,10 +95,8 @@ public sealed class PluginLoaderTests
 
         try
         {
-            // Act
             var result = loader.DiscoverFromConfiguration(tempFile);
 
-            // Assert
             Assert.NotNull(result);
         }
         finally
@@ -123,7 +110,6 @@ public sealed class PluginLoaderTests
     [Fact]
     public async Task LoadFromConfiguration_Cancelled_ReturnsResultWithCancellationException()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
@@ -144,10 +130,8 @@ public sealed class PluginLoaderTests
 
         try
         {
-            // Act
             var result = await loader.LoadFromConfigurationAsync(tempFile, context, cancellationToken: cts.Token);
 
-            // Assert
             Assert.NotNull(result);
         }
         finally
@@ -158,13 +142,9 @@ public sealed class PluginLoaderTests
         }
     }
 
-    /// <summary>
-    /// Dispose 後に LoadFromConfigurationAsync を呼ぶと ObjectDisposedException が発生することを確認します。
-    /// </summary>
     [Fact]
     public async Task LoadFromConfigurationAsync_AfterDispose_ThrowsObjectDisposedException()
     {
-        // Arrange
         var loader = new PluginLoader();
         var context = new PluginContext();
         var tempFile = Path.GetTempFileName();
@@ -174,7 +154,6 @@ public sealed class PluginLoaderTests
         {
             loader.Dispose();
 
-            // Act & Assert
             await Assert.ThrowsAsync<ObjectDisposedException>(
                 () => loader.LoadFromConfigurationAsync(tempFile, context));
         }
@@ -184,25 +163,17 @@ public sealed class PluginLoaderTests
         }
     }
 
-    /// <summary>
-    /// Dispose 後に LoadAsync を呼ぶと ObjectDisposedException が発生することを確認します。
-    /// </summary>
     [Fact]
     public async Task LoadAsync_AfterDispose_ThrowsObjectDisposedException()
     {
-        // Arrange
         var loader = new PluginLoader();
         var context = new PluginContext();
         loader.Dispose();
 
-        // Act & Assert
         await Assert.ThrowsAsync<ObjectDisposedException>(
             () => loader.LoadAsync(Path.GetTempPath(), context));
     }
 
-    /// <summary>
-    /// Dispose を複数回呼んでも例外が発生しないことを確認します。
-    /// </summary>
     [Fact]
     public void Dispose_MultipleTimes_DoesNotThrow()
     {
@@ -212,9 +183,6 @@ public sealed class PluginLoaderTests
         Assert.Null(ex);
     }
 
-    /// <summary>
-    /// UnloadPlugin に存在しないパスを渡しても例外が発生しないことを確認します。
-    /// </summary>
     [Fact]
     public void UnloadPlugin_NonExistentPath_DoesNotThrow()
     {
@@ -223,9 +191,6 @@ public sealed class PluginLoaderTests
         Assert.Null(ex);
     }
 
-    /// <summary>
-    /// UnloadPluginAsync に存在しないパスを渡しても例外が発生しないことを確認します。
-    /// </summary>
     [Fact]
     public async Task UnloadPluginAsync_NonExistentPath_DoesNotThrow()
     {
@@ -234,37 +199,27 @@ public sealed class PluginLoaderTests
         Assert.Null(ex);
     }
 
-    /// <summary>
-    /// PluginLoadResult の Success プロパティが Instance と Error の状態と一致することを確認します。
-    /// </summary>
     [Fact]
     public void PluginLoadResult_Success_ReflectsInstanceAndError()
     {
         var descriptor = new PluginDescriptor(
             "test-id", "Test", new Version(1, 0, 0),
-            typeof(object), "test.dll",
+            typeof(object).FullName!, "test.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
-        // Instance あり・Error なし → Success = true
         var success = new PluginLoadResult(descriptor, new FakePlugin(), null);
         Assert.True(success.Success);
 
-        // Instance なし → Success = false
         var noInstance = new PluginLoadResult(descriptor, null, null);
         Assert.False(noInstance.Success);
 
-        // Error あり → Success = false
         var withError = new PluginLoadResult(descriptor, null, new Exception("失敗"));
         Assert.False(withError.Success);
     }
 
-    /// <summary>
-    /// LoadFromConfigurationAsync で PluginsPath が空の場合に空リストを返すことを確認します。
-    /// </summary>
     [Fact]
     public async Task LoadFromConfigurationAsync_EmptyPluginsPath_ReturnsEmptyList()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
         var tempFile = Path.GetTempFileName();
@@ -272,10 +227,7 @@ public sealed class PluginLoaderTests
 
         try
         {
-            // Act
             var result = await loader.LoadFromConfigurationAsync(tempFile, context);
-
-            // Assert
             Assert.Empty(result);
         }
         finally
@@ -323,7 +275,7 @@ public sealed class PluginLoaderTests
 
         var descriptor = new PluginDescriptor(
             "test-id", "Test", new Version(1, 0, 0),
-            typeof(object), "test.dll",
+            typeof(object).FullName!, "test.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var loadResults = new List<PluginLoadResult>
@@ -337,50 +289,31 @@ public sealed class PluginLoaderTests
         Assert.True(callback.ExecuteCompletedCalled);
     }
 
-    private class TestEventTracker : IPluginLoaderCallback
-    {
-        public bool LoadStartCalled { get; private set; }
-        public bool LoadCompletedCalled { get; private set; }
-        public bool ExecuteStartCalled { get; private set; }
-        public bool ExecuteCompletedCalled { get; private set; }
-
-        public void OnLoadStart(string configurationFilePath) => LoadStartCalled = true;
-        public void OnLoadCompleted(string configurationFilePath) => LoadCompletedCalled = true;
-        public void OnExecuteStart(string stageId) => ExecuteStartCalled = true;
-        public void OnExecuteCompleted(string stageId) => ExecuteCompletedCalled = true;
-    }
-
-    /// <summary>
-    /// 1 件のプラグインが例外をスローしても他のプラグイン結果が保持されることを確認します。
-    /// </summary>
     [Fact]
     public async Task ExecutePluginsAndWaitAsync_OnePluginThrows_OtherResultsPreserved()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
 
         var descriptor = new PluginDescriptor(
             "ok-plugin", "OK", new Version(1, 0, 0),
-            typeof(object), "ok.dll",
+            typeof(object).FullName!, "ok.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var throwingDescriptor = new PluginDescriptor(
             "throwing-plugin", "Throwing", new Version(1, 0, 0),
-            typeof(object), "throwing.dll",
+            typeof(object).FullName!, "throwing.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var loadResults = new List<PluginLoadResult>
         {
-            new(descriptor,         new FakePlugin(),     null),
+            new(descriptor, new FakePlugin(), null),
             new(throwingDescriptor, new ThrowingPlugin(), null),
         };
 
-        // Act
         var results = await loader.ExecutePluginsAndWaitAsync(
             loadResults, PluginStage.Processing, context);
 
-        // Assert: 2 件とも結果が返る（例外で全体が中断されない）
         Assert.Equal(2, results.Count);
 
         var ok = results.Single(r => r.Descriptor.Id == "ok-plugin");
@@ -393,19 +326,15 @@ public sealed class PluginLoaderTests
         Assert.IsType<InvalidOperationException>(ng.Error);
     }
 
-    /// <summary>
-    /// すべてのプラグインが成功した場合に全件 Success になることを確認します。
-    /// </summary>
     [Fact]
     public async Task ExecutePluginsAndWaitAsync_AllSucceed_AllResultsSuccess()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
 
         var makeDescriptor = (string id) => new PluginDescriptor(
             id, id, new Version(1, 0, 0),
-            typeof(object), $"{id}.dll",
+            typeof(object).FullName!, $"{id}.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var loadResults = new List<PluginLoadResult>
@@ -414,85 +343,68 @@ public sealed class PluginLoaderTests
             new(makeDescriptor("plugin-2"), new FakePlugin(), null),
         };
 
-        // Act
         var results = await loader.ExecutePluginsAndWaitAsync(
             loadResults, PluginStage.Processing, context);
 
-        // Assert
         Assert.Equal(2, results.Count);
         Assert.All(results, r => Assert.True(r.Success));
     }
 
-    /// <summary>
-    /// ロード失敗プラグイン（Success=false）はスキップされ、結果に含まれることを確認します。
-    /// </summary>
     [Fact]
     public async Task ExecutePluginsAndWaitAsync_SkipsFailedLoadResults()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
 
         var descriptor = new PluginDescriptor(
             "ok-plugin", "OK", new Version(1, 0, 0),
-            typeof(object), "ok.dll",
+            typeof(object).FullName!, "ok.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var failedDescriptor = new PluginDescriptor(
             "failed-plugin", "Failed", new Version(1, 0, 0),
-            typeof(object), "failed.dll",
+            typeof(object).FullName!, "failed.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var loadResults = new List<PluginLoadResult>
         {
-            new(descriptor,       new FakePlugin(), null),
-            new(failedDescriptor, null,             new Exception("ロード失敗")),  // Success=false
+            new(descriptor, new FakePlugin(), null),
+            new(failedDescriptor, null, new Exception("ロード失敗")),
         };
 
-        // Act
         var results = await loader.ExecutePluginsAndWaitAsync(
             loadResults, PluginStage.Processing, context);
 
-        // Assert: 両方の結果が返される（スキップされたものを含む）
         Assert.Equal(2, results.Count);
-        
-        // 最初のプラグインは実行成功
         Assert.Equal("ok-plugin", results[0].Descriptor.Id);
         Assert.True(results[0].Success);
         Assert.False(results[0].Skipped);
 
-        // 2 番目のプラグインはスキップされた
         Assert.Equal("failed-plugin", results[1].Descriptor.Id);
-        Assert.True(results[1].Success);  // スキップもエラーではないため Success = true
+        Assert.True(results[1].Success);
         Assert.True(results[1].Skipped);
         Assert.Equal("ロードに失敗したためスキップされました。", results[1].SkipReason);
     }
 
-    /// <summary>
-    /// SupportedStages に含まれないステージで実行した場合、プラグインがスキップされることを確認します。
-    /// </summary>
     [Fact]
     public async Task ExecutePluginsAndWaitAsync_SkipsUnsupportedStage()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
 
         var descriptor = new PluginDescriptor(
             "processing-only", "ProcessingOnly", new Version(1, 0, 0),
-            typeof(object), "processing.dll",
-            new[] { PluginStage.Processing }.ToFrozenSet());  // Processing のみサポート
+            typeof(object).FullName!, "processing.dll",
+            new[] { PluginStage.Processing }.ToFrozenSet());
 
         var loadResults = new List<PluginLoadResult>
         {
             new(descriptor, new FakePlugin(), null),
         };
 
-        // Act: PreProcessing ステージで実行
         var results = await loader.ExecutePluginsAndWaitAsync(
             loadResults, PluginStage.PreProcessing, context);
 
-        // Assert: スキップされた
         Assert.Single(results);
         Assert.Equal("processing-only", results[0].Descriptor.Id);
         Assert.True(results[0].Success);
@@ -501,62 +413,103 @@ public sealed class PluginLoaderTests
         Assert.Contains("対象外", results[0].SkipReason);
     }
 
-    /// <summary>
-    /// スキップされたプラグインと実行されたプラグインが混在する場合、
-    /// すべての結果が正しく返されることを確認します。
-    /// </summary>
     [Fact]
     public async Task ExecutePluginsAndWaitAsync_MixedSkippedAndExecuted()
     {
-        // Arrange
         using var loader = new PluginLoader();
         var context = new PluginContext();
 
         var preDescriptor = new PluginDescriptor(
             "pre-only", "PreOnly", new Version(1, 0, 0),
-            typeof(object), "pre.dll",
+            typeof(object).FullName!, "pre.dll",
             new[] { PluginStage.PreProcessing }.ToFrozenSet());
 
         var procDescriptor = new PluginDescriptor(
             "proc-only", "ProcOnly", new Version(1, 0, 0),
-            typeof(object), "proc.dll",
+            typeof(object).FullName!, "proc.dll",
             new[] { PluginStage.Processing }.ToFrozenSet());
 
         var bothDescriptor = new PluginDescriptor(
             "both", "Both", new Version(1, 0, 0),
-            typeof(object), "both.dll",
+            typeof(object).FullName!, "both.dll",
             new[] { PluginStage.PreProcessing, PluginStage.Processing }.ToFrozenSet());
 
         var loadResults = new List<PluginLoadResult>
         {
-            new(preDescriptor,  new FakePlugin(), null),
+            new(preDescriptor, new FakePlugin(), null),
             new(procDescriptor, new FakePlugin(), null),
             new(bothDescriptor, new FakePlugin(), null),
         };
 
-        // Act: Processing ステージで実行
         var results = await loader.ExecutePluginsAndWaitAsync(
             loadResults, PluginStage.Processing, context);
 
-        // Assert: 3 件の結果が返される
         Assert.Equal(3, results.Count);
-
-        // pre-only はスキップ
         Assert.Equal("pre-only", results[0].Descriptor.Id);
-        Assert.True(results[0].Skipped, $"pre-only should be skipped. Actual: Skipped={results[0].Skipped}, Success={results[0].Success}, SkipReason={results[0].SkipReason}");
+        Assert.True(results[0].Skipped);
 
-        // proc-only は実行
         Assert.Equal("proc-only", results[1].Descriptor.Id);
         Assert.False(results[1].Skipped);
         Assert.True(results[1].Success);
 
-        // both は実行
         Assert.Equal("both", results[2].Descriptor.Id);
         Assert.False(results[2].Skipped);
         Assert.True(results[2].Success);
     }
 
-    // ExecuteAsync で必ず例外をスローするプラグイン
+    [Fact]
+    public void PluginMetadata_DefaultIsolationMode_IsInProcess()
+    {
+        var attribute = new PluginAttribute("test-id", "Test", "1.0.0");
+        Assert.Equal(PluginIsolationMode.InProcess, attribute.IsolationMode);
+
+        var descriptor = new PluginDescriptor(
+            "test-id", "Test", new Version(1, 0, 0),
+            typeof(object).FullName!, "test.dll",
+            new[] { PluginStage.Processing }.ToFrozenSet());
+        Assert.Equal(PluginIsolationMode.InProcess, descriptor.IsolationMode);
+    }
+
+    [Fact]
+    public async Task LoadPluginAsync_OutOfProcessIsolation_ReturnsErrorIfHostNotAvailable()
+    {
+        using var loader = new PluginLoader();
+        var descriptor = new PluginDescriptor(
+            "oop-plugin", "OutOfProcess", new Version(1, 0, 0),
+            typeof(object).FullName!, "oop.dll",
+            new[] { PluginStage.Processing }.ToFrozenSet())
+        {
+            IsolationMode = PluginIsolationMode.OutOfProcess,
+        };
+
+        var method = typeof(PluginLoader).GetMethod("LoadPluginAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var task = (Task<PluginLoadResult>)method!.Invoke(loader, [descriptor, new PluginContext(), CancellationToken.None])!;
+        var result = await task;
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Error);
+        // PluginHost.exe が見つからない場合は FileNotFoundException、
+        // それ以外の場合は InvalidOperationException や TimeoutException
+        Assert.True(
+            result.Error is FileNotFoundException or InvalidOperationException or TimeoutException,
+            $"予期しない例外型: {result.Error.GetType().Name}");
+    }
+
+    private sealed class TestEventTracker : IPluginLoaderCallback
+    {
+        public bool LoadStartCalled { get; private set; }
+        public bool LoadCompletedCalled { get; private set; }
+        public bool ExecuteStartCalled { get; private set; }
+        public bool ExecuteCompletedCalled { get; private set; }
+
+        public void OnLoadStart(string configurationFilePath) => LoadStartCalled = true;
+        public void OnLoadCompleted(string configurationFilePath) => LoadCompletedCalled = true;
+        public void OnExecuteStart(string stageId) => ExecuteStartCalled = true;
+        public void OnExecuteCompleted(string stageId) => ExecuteCompletedCalled = true;
+    }
+
     private sealed class ThrowingPlugin : IPlugin
     {
         public string Id => "throwing-plugin";
@@ -570,7 +523,6 @@ public sealed class PluginLoaderTests
             => throw new InvalidOperationException("意図的な実行エラー");
     }
 
-    // PluginLoadResult.Success テスト用の最小 IPlugin 実装
     private sealed class FakePlugin : IPlugin
     {
         public string Id => "fake";
