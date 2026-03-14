@@ -1,4 +1,5 @@
-﻿using PluginManager;
+﻿using System.IO;
+using PluginManager;
 using Xunit;
 
 namespace PluginManagerTest;
@@ -81,6 +82,21 @@ public sealed class PluginErrorInfoTests
     }
 
     [Fact]
+    public void FromException_WithSharingViolationIOException_ReturnsTransientFailureCategory()
+    {
+        var ex = new IOException("使用中")
+        {
+            HResult = unchecked((int)0x80070020),
+        };
+
+        var errorInfo = PluginErrorInfo.FromException(ex);
+
+        Assert.Equal(PluginErrorCategory.TransientFailure, errorInfo.Category);
+        Assert.True(errorInfo.IsRetryable);
+        Assert.Equal("ファイルが他のプロセスで使用中です。", errorInfo.Message);
+    }
+
+    [Fact]
     public void FromException_WithUnknownException_ReturnsUnknownCategory()
     {
         var ex = new ArgumentException("不明なエラー");
@@ -105,6 +121,16 @@ public sealed class PluginErrorInfoTests
     }
 
     [Fact]
+    public void InitializationFailure_WithTransientException_IsRetryable()
+    {
+        var ex = new TimeoutException("timeout");
+
+        var errorInfo = PluginErrorInfo.InitializationFailure(ex);
+
+        Assert.True(errorInfo.IsRetryable);
+    }
+
+    [Fact]
     public void ExecutionFailure_CreatesCorrectErrorInfo()
     {
         var ex = new Exception("処理エラー");
@@ -114,6 +140,19 @@ public sealed class PluginErrorInfoTests
         Assert.Equal(PluginErrorCategory.ExecutionFailure, errorInfo.Category);
         Assert.Contains("実行に失敗しました", errorInfo.Message);
         Assert.Contains("処理エラー", errorInfo.Message);
+    }
+
+    [Fact]
+    public void ExecutionFailure_WithSharingViolationIOException_IsRetryable()
+    {
+        var ex = new IOException("使用中")
+        {
+            HResult = unchecked((int)0x80070020),
+        };
+
+        var errorInfo = PluginErrorInfo.ExecutionFailure(ex);
+
+        Assert.True(errorInfo.IsRetryable);
     }
 
     [Fact]
@@ -128,6 +167,19 @@ public sealed class PluginErrorInfoTests
         Assert.NotNull(result.ErrorInfo);
         Assert.Equal(PluginErrorCategory.Timeout, result.ErrorInfo!.Category);
         Assert.True(result.ErrorInfo.IsRetryable);
+    }
+
+    [Fact]
+    public void PluginLoadResult_WithErrorInfo_SetsErrorAndErrorInfo()
+    {
+        var descriptor = CreateTestDescriptor();
+        var errorInfo = PluginErrorInfo.ExecutionFailure(new InvalidOperationException("error"));
+
+        var result = new PluginLoadResult(descriptor, errorInfo);
+
+        Assert.False(result.Success);
+        Assert.Same(errorInfo, result.ErrorInfo);
+        Assert.Same(errorInfo.Exception, result.Error);
     }
 
     [Fact]

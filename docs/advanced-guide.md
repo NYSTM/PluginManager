@@ -56,13 +56,17 @@
 ### 3-4. PluginHost のクラス構成
 
 `PluginHost` は Named Pipe を介してメインプロセスからの要求を受け取り、別プロセスでプラグインを実行します。  
-責務ごとに次の 3 クラスに分割されています。
+責務ごとに次の 4 クラスに分割されています。
 
 | クラス | 責務 |
 |---|---|
 | `PluginRegistry` | プラグインの Load / Unload / 状態管理 |
 | `PluginRequestHandler` | Ping / Initialize / Execute / Unload コマンドの処理 |
 | `PipeServer` | Named Pipe 接続受付・送受信ループ・並列数制御 |
+| `PluginHostNotifier` | `PluginHost` 内部イベントを process 通知へ変換 |
+
+`PluginHost` の運用情報は通常の Console 出力ではなく、メモリマップドファイル経由の process 通知として `PluginManager` 側へ渡します。
+そのため、通常運用で `PluginHost` の標準出力を監視する前提は不要です。
 
 ### 3-5. JSON ベースのプロセス間コンテキスト転送
 
@@ -276,6 +280,16 @@ PluginBase         ← IPlugin の基底クラス（推奨）
 
 通常のロード・実行通知は `IPluginLoaderCallback`、`PluginExecutor` の進捗通知は `IPluginExecutorCallback` を使います。
 `OutOfProcess` の詳細通知は `IPluginProcessCallback` を使うと、`PluginHost` 起動、別プロセス側のロード・初期化・実行・アンロード・シャットダウン通知を型安全に追跡できます。
+
+`OnNotification(PluginProcessNotification notification)` を実装すると、次のようなホスト運用通知もまとめて受け取れます。
+
+- `PipeServerStarted` / `PipeServerStopped`
+- `ClientConnectionWaiting` / `ClientConnected`
+- `HostShutdownRequested` / `HostFatalError`
+- `ConnectionProcessingFailed` / `RequestProcessingFailed` / `ServerInstanceFailed`
+- `UnloadAllStarted` / `UnloadAllCompleted`
+
+標準出力の読み取りではなく、process 通知を診断の入口として扱うのが現在の前提です。
 
 ### 7-7. `UnloadVerifier` によるアンロード確認
 

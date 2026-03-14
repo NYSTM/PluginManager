@@ -12,12 +12,12 @@ internal sealed class PluginRequestHandler
     private const int DefaultExecuteTimeoutSeconds = 300;
 
     private readonly PluginRegistry _registry;
-    private readonly MemoryMappedNotificationQueue? _notificationQueue;
+    private readonly PluginHostNotifier _notifier;
 
-    public PluginRequestHandler(PluginRegistry registry, MemoryMappedNotificationQueue? notificationQueue = null)
+    public PluginRequestHandler(PluginRegistry registry, PluginHostNotifier notifier)
     {
         _registry = registry;
-        _notificationQueue = notificationQueue;
+        _notifier = notifier;
     }
 
     /// <summary>
@@ -41,7 +41,7 @@ internal sealed class PluginRequestHandler
         catch (Exception ex)
         {
             PublishNotification(
-                PluginProcessNotificationType.ExecuteFailed,
+                PluginProcessNotificationType.RequestProcessingFailed,
                 "要求処理中に未処理例外が発生しました。",
                 request,
                 ex.GetType().Name,
@@ -82,7 +82,7 @@ internal sealed class PluginRequestHandler
     {
         PublishNotification(
             PluginProcessNotificationType.ShutdownReceived,
-            "PluginHost がシャットダウン要求を受信しました。",
+            "PluginHost がシャットダウンコマンドを受信しました。",
             request);
         return new PluginHostResponse { RequestId = request.RequestId, Success = true };
     }
@@ -126,7 +126,6 @@ internal sealed class PluginRequestHandler
             return ErrorResponse(request.RequestId, ex.Message, ex.GetType().Name);
         }
 
-        Console.WriteLine($"[PluginHost#{instanceIndex}] 初期化完了: {request.PluginId}");
         PublishNotification(
             PluginProcessNotificationType.InitializeCompleted,
             $"プラグイン '{request.PluginId}' の初期化が完了しました。",
@@ -161,7 +160,6 @@ internal sealed class PluginRequestHandler
         {
             var result = await plugin.ExecuteAsync(stage, context, timeoutCts.Token);
 
-            Console.WriteLine($"[PluginHost#{instanceIndex}] 実行完了: {request.PluginId} @ {request.StageId}");
             PublishNotification(
                 PluginProcessNotificationType.ExecuteCompleted,
                 $"プラグイン '{request.PluginId}' の実行が完了しました。",
@@ -212,19 +210,14 @@ internal sealed class PluginRequestHandler
         PluginHostRequest request,
         string? errorType = null,
         string? errorMessage = null)
-    {
-        _notificationQueue?.Enqueue(new PluginProcessNotification
-        {
-            NotificationType = notificationType,
-            Message = message,
-            RequestId = request.RequestId,
-            PluginId = request.PluginId,
-            StageId = request.StageId,
-            ProcessId = Environment.ProcessId,
-            ErrorType = errorType,
-            ErrorMessage = errorMessage,
-        });
-    }
+        => _notifier.Notify(
+            notificationType,
+            message,
+            requestId: request.RequestId,
+            pluginId: request.PluginId,
+            stageId: request.StageId,
+            errorType: errorType,
+            errorMessage: errorMessage);
 
     private static PluginContext BuildContext(IReadOnlyDictionary<string, JsonElement>? contextData)
     {

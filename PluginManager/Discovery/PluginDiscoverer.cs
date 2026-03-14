@@ -121,19 +121,18 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
     /// </summary>
     private static PluginDescriptor? CreateDescriptor(Type pluginType, string assemblyPath)
     {
+        var pluginTypeName = pluginType.FullName ?? pluginType.Name;
         var attribute = pluginType.GetCustomAttribute<PluginAttribute>();
         if (attribute is not null)
         {
             if (!Version.TryParse(attribute.Version, out var parsed))
                 parsed = new Version(1, 0, 0, 0);
 
-            var stages = attribute.SupportedStageIds.Length > 0
-                ? (IReadOnlySet<PluginStage>)attribute.SupportedStageIds
-                    .Select(id => new PluginStage(id))
-                    .ToFrozenSet()
-                : _defaultStages;
+            var stages = (IReadOnlySet<PluginStage>)attribute.SupportedStageIds
+                .Select(id => new PluginStage(id))
+                .ToFrozenSet();
 
-            return new PluginDescriptor(attribute.Id, attribute.Name, parsed, pluginType.FullName ?? pluginType.Name, assemblyPath, stages)
+            return new PluginDescriptor(attribute.Id, attribute.Name, parsed, pluginTypeName, assemblyPath, stages)
             {
                 IsolationMode = attribute.IsolationMode,
             };
@@ -141,10 +140,10 @@ internal sealed class PluginDiscoverer(ILogger? logger = null)
 
         var fallbackVersion = pluginType.Assembly.GetName().Version ?? new Version(1, 0, 0, 0);
         return new PluginDescriptor(
-            pluginType.FullName ?? pluginType.Name,
+            pluginTypeName,
             pluginType.Name,
             fallbackVersion,
-            pluginType.FullName ?? pluginType.Name,
+            pluginTypeName,
             assemblyPath,
             _defaultStages);
     }

@@ -11,8 +11,14 @@ internal sealed class PluginRegistry : IDisposable
 {
     private readonly ConcurrentDictionary<string, IPlugin> _plugins = new();
     private readonly ConcurrentDictionary<string, PluginLoadContext> _contexts = new();
+    private readonly PluginHostNotifier _notifier;
     private readonly object _lock = new();
     private bool _disposed;
+
+    public PluginRegistry(PluginHostNotifier notifier)
+    {
+        _notifier = notifier;
+    }
 
     /// <summary>
     /// プラグインをロードして登録します。
@@ -44,7 +50,6 @@ internal sealed class PluginRegistry : IDisposable
                 _plugins[request.PluginId] = plugin;
                 _contexts[request.PluginId] = loadContext;
 
-                Console.WriteLine($"[PluginHost#{instanceIndex}] ロード完了: {request.PluginId}");
                 return new PluginHostResponse { RequestId = request.RequestId, Success = true };
             }
             catch (Exception ex)
@@ -77,7 +82,6 @@ internal sealed class PluginRegistry : IDisposable
                 GC.Collect(0, GCCollectionMode.Optimized);
             }
 
-            Console.WriteLine($"[PluginHost#{instanceIndex}] アンロード完了: {request.PluginId}");
             return new PluginHostResponse { RequestId = request.RequestId, Success = true };
         }
     }
@@ -95,7 +99,10 @@ internal sealed class PluginRegistry : IDisposable
     {
         lock (_lock)
         {
-            Console.WriteLine("[PluginHost] 全プラグインアンロード開始");
+            _notifier.Notify(
+                PluginProcessNotificationType.UnloadAllStarted,
+                "PluginHost が全プラグインのアンロードを開始します。");
+
             _plugins.Clear();
 
             foreach (var ctx in _contexts.Values)
@@ -107,7 +114,9 @@ internal sealed class PluginRegistry : IDisposable
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
-            Console.WriteLine("[PluginHost] 全プラグインアンロード完了");
+            _notifier.Notify(
+                PluginProcessNotificationType.UnloadAllCompleted,
+                "PluginHost が全プラグインのアンロードを完了しました。");
         }
     }
 

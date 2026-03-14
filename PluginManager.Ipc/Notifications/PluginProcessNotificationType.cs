@@ -6,6 +6,17 @@
 public enum PluginProcessNotificationType
 {
     HostStarted,
+    HostShutdownRequested,
+    HostFatalError,
+    PipeServerStarted,
+    PipeServerStopped,
+    ClientConnectionWaiting,
+    ClientConnected,
+    ConnectionProcessingFailed,
+    RequestProcessingFailed,
+    ServerInstanceFailed,
+    UnloadAllStarted,
+    UnloadAllCompleted,
     LoadCompleted,
     LoadFailed,
     InitializeStarted,

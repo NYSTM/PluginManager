@@ -16,7 +16,7 @@ namespace PluginHost;
 /// プラグインアセンブリの依存関係を自動的に解決します。
 /// </para>
 /// </remarks>
-internal sealed class PluginLoadContext : AssemblyLoadContext
+internal class PluginLoadContext : AssemblyLoadContext
 {
     private readonly AssemblyDependencyResolver _resolver;
 
@@ -29,6 +29,12 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
         _resolver = new(pluginPath);
     }
 
+    protected virtual string? ResolveAssemblyPath(System.Reflection.AssemblyName assemblyName)
+        => _resolver.ResolveAssemblyToPath(assemblyName);
+
+    protected virtual string? ResolveUnmanagedDllPath(string unmanagedDllName)
+        => _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
+
     /// <summary>
     /// マネージドアセンブリを読み込みます。
     /// </summary>
@@ -36,7 +42,7 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
     /// <returns>読み込まれたアセンブリ。解決できない場合は <see langword="null"/>。</returns>
     protected override System.Reflection.Assembly? Load(System.Reflection.AssemblyName assemblyName)
     {
-        var assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
+        var assemblyPath = ResolveAssemblyPath(assemblyName);
         return assemblyPath is not null ? LoadFromAssemblyPath(assemblyPath) : null;
     }
 
@@ -47,7 +53,7 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
     /// <returns>読み込まれた DLL のハンドル。解決できない場合は <see cref="IntPtr.Zero"/>。</returns>
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
     {
-        var libraryPath = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
+        var libraryPath = ResolveUnmanagedDllPath(unmanagedDllName);
         return libraryPath is not null ? LoadUnmanagedDllFromPath(libraryPath) : IntPtr.Zero;
     }
 }

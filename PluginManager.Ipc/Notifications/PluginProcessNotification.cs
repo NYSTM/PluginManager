@@ -29,6 +29,6 @@ public sealed record PluginProcessNotification
     /// <summary>失敗時のエラーメッセージ。</summary>
     public string? ErrorMessage { get; init; }
 
-    /// <summary>生成時刻（UTC）。</summary>
+    /// <summary>生成時刻（実行端末のシステム時刻）。</summary>
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.Now;
 }

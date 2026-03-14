@@ -110,19 +110,22 @@ internal sealed class PluginHostClient : IDisposable
         _client?.Dispose();
         _sendLock.Dispose();
 
-        if (_hostProcess is not null && !_hostProcess.HasExited)
+        if (_hostProcess is not null)
         {
             try
             {
-                _hostProcess.Kill();
-                _hostProcess.WaitForExit(1000);
+                if (!_hostProcess.HasExited)
+                {
+                    _hostProcess.Kill();
+                    _hostProcess.WaitForExit(1000);
+                }
             }
             catch
             {
                 // プロセス終了失敗は無視
             }
-        }
 
-        _hostProcess?.Dispose();
+            _hostProcess.Dispose();
+        }
     }
 }

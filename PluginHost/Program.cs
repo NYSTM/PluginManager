@@ -16,37 +16,33 @@ internal sealed class Program
     public static async Task<int> Main(string[] args)
     {
         if (args.Length < 1)
-        {
-            Console.Error.WriteLine("使用法: PluginHost.exe <pipe-name> [notification-queue-name]");
             return 1;
-        }
 
         var pipeName = args[0];
         var notificationQueueName = args.Length > 1 ? args[1] : null;
-        Console.WriteLine($"[PluginHost] プロセス起動: PID={Environment.ProcessId}, Pipe={pipeName}");
 
         using var shutdownCts = new CancellationTokenSource();
         using var notificationQueue = string.IsNullOrWhiteSpace(notificationQueueName)
             ? null
             : new MemoryMappedNotificationQueue(notificationQueueName);
+        var notifier = new PluginHostNotifier(notificationQueue);
 
-        notificationQueue?.Enqueue(new PluginProcessNotification
-        {
-            NotificationType = PluginProcessNotificationType.HostStarted,
-            Message = $"PluginHost プロセスが起動しました。PID={Environment.ProcessId}",
-            ProcessId = Environment.ProcessId,
-        });
+        notifier.Notify(
+            PluginProcessNotificationType.HostStarted,
+            $"PluginHost プロセスが起動しました。PID={Environment.ProcessId}, Pipe={pipeName}");
 
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
-            Console.WriteLine("[PluginHost] シャットダウン要求を受信しました...");
+            notifier.Notify(
+                PluginProcessNotificationType.HostShutdownRequested,
+                "PluginHost がシャットダウン要求を受信しました。キャンセルを開始します。");
             shutdownCts.Cancel();
         };
 
-        using var registry = new PluginRegistry();
-        var handler = new PluginRequestHandler(registry, notificationQueue);
-        var server = new PipeServer(pipeName, handler);
+        using var registry = new PluginRegistry(notifier);
+        var handler = new PluginRequestHandler(registry, notifier);
+        var server = new PipeServer(pipeName, handler, notifier);
 
         try
         {
@@ -55,7 +51,11 @@ internal sealed class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[PluginHost] 致命的エラー: {ex}");
+            notifier.Notify(
+                PluginProcessNotificationType.HostFatalError,
+                "PluginHost で致命的エラーが発生しました。",
+                errorType: ex.GetType().Name,
+                errorMessage: ex.Message);
             return 1;
         }
     }

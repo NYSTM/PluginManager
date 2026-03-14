@@ -8,8 +8,20 @@
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>
 		<Authors>NYSTM</Authors>
 		<Copyright>Copyright (c) 2026 NYSTM</Copyright>
-		<Version>1.0.3</Version>
+		<Version>1.0.4</Version>
 	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+	  <DebugType>embedded</DebugType>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+	  <DebugType>none</DebugType>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<InternalsVisibleTo Include="PluginManagerTest" />
+	</ItemGroup>
 
 	<ItemGroup>
 		<None Include="..\LICENSE">

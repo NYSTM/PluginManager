@@ -48,16 +48,11 @@ public sealed class PluginInterfaceTests
     {
         var plugin = new FullPlugin();
 
-        // IPluginMetadata
         Assert.NotNull(plugin.Id);
         Assert.NotNull(plugin.Name);
         Assert.NotNull(plugin.Version);
         Assert.NotNull(plugin.SupportedStages);
-
-        // IPluginInitializer
         Assert.NotNull(plugin as IPluginInitializer);
-
-        // IStageExecutor
         Assert.NotNull(plugin as IStageExecutor);
     }
 
@@ -78,10 +73,8 @@ public sealed class PluginInterfaceTests
         var plugin = new SimplePluginBase();
         var context = new PluginContext();
 
-        // デフォルト実装は何もしない
         await plugin.InitializeAsync(context);
 
-        // エラーが発生しないことを確認
         Assert.True(true);
     }
 
@@ -144,7 +137,23 @@ public sealed class PluginInterfaceTests
         Assert.Throws<ArgumentException>(() => new EmptyIdPluginBase());
     }
 
-    // テスト用プラグイン実装
+    [Fact]
+    public void PluginBase_WithEmptyName_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => new EmptyNamePluginBase());
+    }
+
+    [Fact]
+    public void PluginBase_WithNullVersion_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => new NullVersionPluginBase());
+    }
+
+    [Fact]
+    public void PluginBase_WithNullSupportedStages_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => new NullStagesPluginBase());
+    }
 
     private sealed class MetadataOnlyPlugin : IPluginMetadata
     {
@@ -277,9 +286,7 @@ public sealed class PluginInterfaceTests
             PluginStage stage,
             PluginContext context,
             CancellationToken cancellationToken)
-        {
-            return Task.FromResult<object?>(null);
-        }
+            => Task.FromResult<object?>(null);
     }
 
     private sealed class EmptyIdPluginBase : PluginBase
@@ -293,8 +300,48 @@ public sealed class PluginInterfaceTests
             PluginStage stage,
             PluginContext context,
             CancellationToken cancellationToken)
+            => Task.FromResult<object?>(null);
+    }
+
+    private sealed class EmptyNamePluginBase : PluginBase
+    {
+        public EmptyNamePluginBase()
+            : base("empty-name", "", new Version(1, 0, 0), PluginStage.Processing)
         {
-            return Task.FromResult<object?>(null);
         }
+
+        protected override Task<object?> OnExecuteAsync(
+            PluginStage stage,
+            PluginContext context,
+            CancellationToken cancellationToken)
+            => Task.FromResult<object?>(null);
+    }
+
+    private sealed class NullVersionPluginBase : PluginBase
+    {
+        public NullVersionPluginBase()
+            : base("null-version", "NullVersion", null!, PluginStage.Processing)
+        {
+        }
+
+        protected override Task<object?> OnExecuteAsync(
+            PluginStage stage,
+            PluginContext context,
+            CancellationToken cancellationToken)
+            => Task.FromResult<object?>(null);
+    }
+
+    private sealed class NullStagesPluginBase : PluginBase
+    {
+        public NullStagesPluginBase()
+            : base("null-stages", "NullStages", new Version(1, 0, 0), null!)
+        {
+        }
+
+        protected override Task<object?> OnExecuteAsync(
+            PluginStage stage,
+            PluginContext context,
+            CancellationToken cancellationToken)
+            => Task.FromResult<object?>(null);
     }
 }

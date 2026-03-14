@@ -339,8 +339,10 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
         => _processNotificationPublisher?.Publish(notification);
 
     private static string FindPluginHostExecutable()
+        => FindPluginHostExecutable(AppContext.BaseDirectory);
+
+    private static string FindPluginHostExecutable(string basePath)
     {
-        var basePath = AppContext.BaseDirectory;
         var hostPath = Path.Combine(basePath, "PluginHost.exe");
 
         if (File.Exists(hostPath))

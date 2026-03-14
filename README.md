@@ -228,7 +228,7 @@ public sealed class MyPlugin : PluginBase
 
 ```csharp
 context.SetProperty("sample.Message", "Hello, PluginManager!");
-context.SetProperty("sample.CreatedAt", DateTime.UtcNow);
+context.SetProperty("sample.CreatedAt", DateTime.Now);
 ```
 
 後段プラグインで値を読みます。

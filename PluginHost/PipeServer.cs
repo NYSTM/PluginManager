@@ -16,13 +16,15 @@ internal sealed class PipeServer
 
     private readonly string _pipeName;
     private readonly PluginRequestHandler _handler;
+    private readonly PluginHostNotifier _notifier;
     private readonly SemaphoreSlim _requestSemaphore = new(MaxConcurrentRequests, MaxConcurrentRequests);
     private readonly ConcurrentBag<Task> _connectionTasks = new();
 
-    public PipeServer(string pipeName, PluginRequestHandler handler)
+    public PipeServer(string pipeName, PluginRequestHandler handler, PluginHostNotifier notifier)
     {
         _pipeName = pipeName;
         _handler = handler;
+        _notifier = notifier;
     }
 
     /// <summary>
@@ -30,7 +32,9 @@ internal sealed class PipeServer
     /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine($"[PluginHost] 最大同時接続数: {MaxConcurrentClients}, 最大並列リクエスト数: {MaxConcurrentRequests}");
+        _notifier.Notify(
+            PluginProcessNotificationType.PipeServerStarted,
+            $"Named Pipe サーバーを開始しました。Pipe={_pipeName}, MaxClients={MaxConcurrentClients}, MaxRequests={MaxConcurrentRequests}");
 
         var acceptTasks = new List<Task>(MaxConcurrentClients);
         for (var i = 0; i < MaxConcurrentClients; i++)
@@ -40,10 +44,11 @@ internal sealed class PipeServer
         }
 
         await Task.WhenAll(acceptTasks);
-        Console.WriteLine("[PluginHost] すべての受付タスクが終了しました。接続処理の完了を待機中...");
-
         await WaitForAllConnectionsAsync();
-        Console.WriteLine("[PluginHost] すべての接続処理が終了しました。");
+
+        _notifier.Notify(
+            PluginProcessNotificationType.PipeServerStopped,
+            "Named Pipe サーバーが停止しました。すべての接続処理が終了しています。");
 
         _requestSemaphore.Dispose();
     }
@@ -61,7 +66,9 @@ internal sealed class PipeServer
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
 
-                Console.WriteLine($"[PluginHost#{instanceIndex}] クライアント接続待機中...");
+                _notifier.Notify(
+                    PluginProcessNotificationType.ClientConnectionWaiting,
+                    $"クライアント接続を待機しています。ServerInstance={instanceIndex}");
 
                 try
                 {
@@ -73,7 +80,9 @@ internal sealed class PipeServer
                     break;
                 }
 
-                Console.WriteLine($"[PluginHost#{instanceIndex}] クライアント接続完了");
+                _notifier.Notify(
+                    PluginProcessNotificationType.ClientConnected,
+                    $"クライアント接続が確立しました。ServerInstance={instanceIndex}");
 
                 var connectionTask = Task.Run(async () =>
                 {
@@ -85,7 +94,11 @@ internal sealed class PipeServer
                         }
                         catch (Exception ex)
                         {
-                            Console.Error.WriteLine($"[PluginHost#{instanceIndex}] 接続処理エラー: {ex.Message}");
+                            _notifier.Notify(
+                                PluginProcessNotificationType.ConnectionProcessingFailed,
+                                $"接続処理でエラーが発生しました。ServerInstance={instanceIndex}",
+                                errorType: ex.GetType().Name,
+                                errorMessage: ex.Message);
                         }
                     }
                 }, CancellationToken.None);
@@ -96,7 +109,13 @@ internal sealed class PipeServer
         catch (Exception ex)
         {
             if (!cancellationToken.IsCancellationRequested)
-                Console.Error.WriteLine($"[PluginHost#{instanceIndex}] サーバーインスタンスエラー: {ex.Message}");
+            {
+                _notifier.Notify(
+                    PluginProcessNotificationType.ServerInstanceFailed,
+                    $"サーバーインスタンスでエラーが発生しました。ServerInstance={instanceIndex}",
+                    errorType: ex.GetType().Name,
+                    errorMessage: ex.Message);
+            }
         }
     }
 
@@ -152,10 +171,7 @@ internal sealed class PipeServer
                     await server.FlushAsync(cancellationToken);
 
                     if (request.Command == PluginHostCommand.Shutdown)
-                    {
-                        Console.WriteLine($"[PluginHost#{instanceIndex}] シャットダウンコマンドを受信");
                         return;
-                    }
                 }
             }
             catch (OperationCanceledException)
@@ -164,7 +180,11 @@ internal sealed class PipeServer
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[PluginHost#{instanceIndex}] 要求処理エラー: {ex.Message}");
+                _notifier.Notify(
+                    PluginProcessNotificationType.RequestProcessingFailed,
+                    $"要求処理でエラーが発生しました。ServerInstance={instanceIndex}",
+                    errorType: ex.GetType().Name,
+                    errorMessage: ex.Message);
             }
         }
     }
@@ -179,7 +199,7 @@ internal sealed class PipeServer
             }
             catch
             {
-                // 接続処理内で既にログ出力済み
+                // 接続処理内で既に通知済み
             }
         }
     }

@@ -381,7 +381,18 @@ using var loader = new PluginLoader();
 loader.SetProcessCallback(new MyProcessCallback());
 ```
 
+`PluginHost` 側の内部状態は Console 出力ではなく process 通知として扱います。
+通常の typed メソッドでは、起動・ロード・初期化・実行・アンロード・シャットダウン通知を受け取れます。
+
 `OnNotification(PluginProcessNotification notification)` を実装すると、生の通知 DTO をまとめて扱えます。
+この方法では次のようなホスト運用通知も受け取れます。
+
+- `PipeServerStarted` / `PipeServerStopped`
+- `ClientConnectionWaiting` / `ClientConnected`
+- `HostShutdownRequested` / `HostFatalError`
+- `ConnectionProcessingFailed` / `RequestProcessingFailed` / `ServerInstanceFailed`
+- `UnloadAllStarted` / `UnloadAllCompleted`
+
 別プロセス通知は `IPluginProcessCallback` で受け取る前提です。
 
 ## 6. PluginContext の使い方
@@ -423,7 +434,7 @@ var strictValue = context.GetPropertyOrThrow<int>("count");
 
 ```csharp
 context.SetProperty("sample.Message", "Hello, PluginManager!");
-context.SetProperty("sample.CreatedAt", DateTime.UtcNow);
+context.SetProperty("sample.CreatedAt", DateTime.Now);
 ```
 
 後段プラグイン:

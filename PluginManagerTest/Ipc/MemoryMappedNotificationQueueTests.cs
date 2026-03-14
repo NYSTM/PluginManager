@@ -9,6 +9,15 @@ namespace PluginManagerTest;
 public sealed class MemoryMappedNotificationQueueTests
 {
     [Fact]
+    public void MapName_ReturnsConstructorValue()
+    {
+        var mapName = $"PluginManagerTest_{Guid.NewGuid():N}";
+        using var queue = new MemoryMappedNotificationQueue(mapName);
+
+        Assert.Equal(mapName, queue.MapName);
+    }
+
+    [Fact]
     public void Enqueue_Drain_ReturnsNotificationsInOrder()
     {
         var mapName = $"PluginManagerTest_{Guid.NewGuid():N}";
@@ -46,6 +55,25 @@ public sealed class MemoryMappedNotificationQueueTests
                 Assert.Equal(PluginProcessNotificationType.ExecuteCompleted, second.NotificationType);
                 Assert.Equal("完了", second.Message);
             });
+    }
+
+    [Fact]
+    public void Enqueue_WhenCapacityExceeded_ThrowsInvalidOperationException()
+    {
+        var mapName = $"PluginManagerTest_{Guid.NewGuid():N}";
+        using var queue = new MemoryMappedNotificationQueue(mapName, capacity: 64);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            queue.Enqueue(new PluginProcessNotification
+            {
+                NotificationType = PluginProcessNotificationType.ExecuteStarted,
+                Message = new string('x', 200),
+                PluginId = "plugin-a",
+                StageId = "Processing",
+                ProcessId = 1,
+            }));
+
+        Assert.Contains("容量を超えました", ex.Message);
     }
 
     [Fact]

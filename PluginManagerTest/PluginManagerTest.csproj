@@ -25,6 +25,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="coverlet.collector" Version="6.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -35,6 +39,8 @@
   <ItemGroup>
     <ProjectReference Include="..\PluginManager\PluginManager.csproj" />
     <ProjectReference Include="..\PluginManager.Core\PluginManager.Core.csproj" />
+    <ProjectReference Include="..\PluginManager.Ipc\PluginManager.Ipc.csproj" />
+    <ProjectReference Include="..\PluginHost\PluginHost.csproj" />
   </ItemGroup>
 
 </Project>

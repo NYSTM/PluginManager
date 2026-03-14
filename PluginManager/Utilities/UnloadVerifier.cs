@@ -50,7 +50,7 @@ internal sealed class UnloadVerifier
         context.Unload();
 
         // GC を複数回実行して回収を試みる
-        var startTime = DateTime.UtcNow;
+        var startTime = DateTime.Now;
         var retryCount = 0;
         const int maxRetries = 10;
 
@@ -58,7 +58,7 @@ internal sealed class UnloadVerifier
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (DateTime.UtcNow - startTime > timeout.Value)
+            if (DateTime.Now - startTime > timeout.Value)
             {
                 _logger?.LogWarning(
                     "アンロード検証タイムアウト: {ContextName} (試行回数: {RetryCount})",
@@ -100,7 +100,7 @@ internal sealed class UnloadVerifier
                 "アンロード検証成功: {ContextName} (試行回数: {RetryCount}, 経過時間: {ElapsedMs}ms)",
                 contextName,
                 retryCount,
-                (DateTime.UtcNow - startTime).TotalMilliseconds);
+                (DateTime.Now - startTime).TotalMilliseconds);
         }
         else
         {
@@ -108,7 +108,7 @@ internal sealed class UnloadVerifier
                 "アンロード検証失敗: {ContextName} (試行回数: {RetryCount}, 経過時間: {ElapsedMs}ms)",
                 contextName,
                 retryCount,
-                (DateTime.UtcNow - startTime).TotalMilliseconds);
+                (DateTime.Now - startTime).TotalMilliseconds);
 
             LogDiagnostics(contextName, weakRef);
         }

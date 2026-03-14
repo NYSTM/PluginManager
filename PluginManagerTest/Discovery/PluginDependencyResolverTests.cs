@@ -1,4 +1,5 @@
 ﻿using System.Collections.Frozen;
+using System.Reflection;
 using PluginManager;
 using Xunit;
 
@@ -34,6 +35,20 @@ public sealed class PluginDependencyResolverTests
     }
 
     [Fact]
+    public void ResolveExecutionOrder_WithNoDependencies_ReturnsOriginalReference()
+    {
+        var descriptors = new[]
+        {
+            CreateDescriptor("plugin-a"),
+            CreateDescriptor("plugin-b"),
+        };
+
+        var result = PluginDependencyResolver.ResolveExecutionOrder(descriptors, [], []);
+
+        Assert.Same(descriptors, result);
+    }
+
+    [Fact]
     public void OrderByConfiguration_WithMultipleDependencies_ReturnsCorrectOrder()
     {
         var descriptors = new[]
@@ -61,6 +76,25 @@ public sealed class PluginDependencyResolverTests
         Assert.Equal("database", result[2].Id);
         Assert.Equal("cache", result[3].Id);
         Assert.Equal("session", result[4].Id);
+    }
+
+    [Fact]
+    public void ResolveExecutionOrder_WithDependencyEntryForUnknownPlugin_IgnoresEntry()
+    {
+        var descriptors = new[]
+        {
+            CreateDescriptor("plugin-a", "Plugin A"),
+            CreateDescriptor("plugin-b", "Plugin B"),
+        };
+
+        var dependencies = new[]
+        {
+            new PluginDependencyEntry { Id = "missing-plugin", DependsOn = ["plugin-a"] },
+        };
+
+        var result = PluginDependencyResolver.ResolveExecutionOrder(descriptors, dependencies, []);
+
+        Assert.Equal(["plugin-a", "plugin-b"], result.Select(x => x.Id).ToArray());
     }
 
     [Fact]
@@ -193,6 +227,23 @@ public sealed class PluginDependencyResolverTests
     }
 
     [Fact]
+    public void TopologicalSort_WithInconsistentIncomingCount_ThrowsInvalidOperationException()
+    {
+        var graph = new DependencyGraph();
+        var descriptor = CreateDescriptor("plugin-a");
+        graph.AddNode("plugin-a", descriptor);
+        graph.GetNode("plugin-a")!.IncomingCount = 1;
+
+        var method = typeof(PluginDependencyResolver).GetMethod("TopologicalSort", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var ex = Assert.Throws<TargetInvocationException>(() => method!.Invoke(null, [graph]));
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
+        Assert.Contains("未処理のプラグイン", ex.InnerException!.Message);
+        Assert.Contains("plugin-a", ex.InnerException.Message);
+    }
+
+    [Fact]
     public void OrderByConfiguration_WithNoDependencies_ReturnsOriginalOrder()
     {
         var descriptors = new[]
@@ -207,10 +258,13 @@ public sealed class PluginDependencyResolverTests
     }
 
     private static PluginDescriptor CreateDescriptor(string id)
+        => CreateDescriptor(id, id);
+
+    private static PluginDescriptor CreateDescriptor(string id, string name)
     {
         return new PluginDescriptor(
             id,
-            id,
+            name,
             new Version(1, 0, 0),
             typeof(object).FullName!,
             $"{id}.dll",

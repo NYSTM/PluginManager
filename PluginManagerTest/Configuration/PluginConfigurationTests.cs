@@ -512,6 +512,50 @@ public sealed class PluginConfigurationTests
         }
     }
 
+    [Fact]
+    public void GetStageMaxDegreeOfParallelism_UndefinedStage_ReturnsNull()
+    {
+        var config = new PluginConfiguration
+        {
+            PluginsPath = "plugins",
+            StageOrders =
+            [
+                new PluginStageOrderEntry
+                {
+                    Stage = PluginStage.Processing,
+                    MaxDegreeOfParallelism = 2,
+                }
+            ]
+        };
+
+        var parallelism = config.GetStageMaxDegreeOfParallelism(PluginStage.PostProcessing);
+
+        Assert.Null(parallelism);
+    }
+
+    [Fact]
+    public void GetStageMaxDegreeOfParallelism_SecondCall_UsesCache()
+    {
+        var config = new PluginConfiguration
+        {
+            PluginsPath = "plugins",
+            StageOrders =
+            [
+                new PluginStageOrderEntry
+                {
+                    Stage = PluginStage.Processing,
+                    MaxDegreeOfParallelism = 2,
+                }
+            ]
+        };
+
+        var first = config.GetStageMaxDegreeOfParallelism(PluginStage.Processing);
+        var second = config.GetStageMaxDegreeOfParallelism(PluginStage.Processing);
+
+        Assert.Equal(2, first);
+        Assert.Equal(2, second);
+    }
+
     /// <summary>
     /// StageOrders の MaxDegreeOfParallelism が 0 以下の場合に例外が発生することを確認します。
     /// </summary>

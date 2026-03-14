@@ -32,6 +32,22 @@ public sealed class PluginLoaderTests
     }
 
     [Fact]
+    public void SetExecutorCallback_WithNull_DoesNotThrow()
+    {
+        using var loader = new PluginLoader();
+        var ex = Record.Exception(() => loader.SetExecutorCallback(null));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void SetProcessCallback_WithNull_DoesNotThrow()
+    {
+        using var loader = new PluginLoader();
+        var ex = Record.Exception(() => loader.SetProcessCallback(null));
+        Assert.Null(ex);
+    }
+
+    [Fact]
     public async Task Load_NonExistentDirectory_ReturnsEmptyList()
     {
         using var loader = new PluginLoader();
@@ -108,7 +124,7 @@ public sealed class PluginLoaderTests
     }
 
     [Fact]
-    public async Task LoadFromConfiguration_Cancelled_ReturnsResultWithCancellationException()
+    public async Task LoadFromConfiguration_Cancelled_ThrowsOperationCanceledException()
     {
         using var loader = new PluginLoader();
         var context = new PluginContext();
@@ -130,9 +146,8 @@ public sealed class PluginLoaderTests
 
         try
         {
-            var result = await loader.LoadFromConfigurationAsync(tempFile, context, cancellationToken: cts.Token);
-
-            Assert.NotNull(result);
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => loader.LoadFromConfigurationAsync(tempFile, context, cancellationToken: cts.Token));
         }
         finally
         {
@@ -458,6 +473,151 @@ public sealed class PluginLoaderTests
     }
 
     [Fact]
+    public void ExecutePluginsAndWaitAsync_WithConfiguredGroups_UsesOrderedResultsGroups()
+    {
+        using var loader = new PluginLoader();
+        SetLastConfig(loader, new PluginConfiguration
+        {
+            PluginsPath = "plugins",
+            StageOrders =
+            [
+                new PluginStageOrderEntry
+                {
+                    Stage = PluginStage.Processing,
+                    PluginOrder =
+                    [
+                        new PluginOrderEntry { Id = "plugin-b", Order = 1 },
+                        new PluginOrderEntry { Id = "plugin-a", Order = 2 },
+                        new PluginOrderEntry { Id = "missing", Order = 3 },
+                    ]
+                }
+            ]
+        });
+
+        var loadResults = new List<PluginLoadResult>
+        {
+            new(CreateDescriptor("plugin-a"), new FakePlugin(), null),
+            new(CreateDescriptor("plugin-b"), new FakePlugin(), null),
+        };
+
+        var groups = InvokeBuildExecutionGroupsForResults(loader, loadResults);
+
+        Assert.NotNull(groups);
+        Assert.Equal(2, groups!.Count);
+        Assert.Equal(["plugin-b"], groups[0].Select(x => x.Descriptor.Id).ToArray());
+        Assert.Equal(["plugin-a"], groups[1].Select(x => x.Descriptor.Id).ToArray());
+    }
+
+    [Fact]
+    public void BuildExecutionGroupsForResults_WithDependencyOnlyConfiguration_ReturnsGroups()
+    {
+        using var loader = new PluginLoader();
+        SetLastConfig(loader, new PluginConfiguration
+        {
+            PluginsPath = "plugins",
+            PluginDependencies =
+            [
+                new PluginDependencyEntry { Id = "plugin-b", DependsOn = ["plugin-a"] },
+            ]
+        });
+
+        var loadResults = new List<PluginLoadResult>
+        {
+            new(CreateDescriptor("plugin-a"), new FakePlugin(), null),
+            new(CreateDescriptor("plugin-b"), new FakePlugin(), null),
+        };
+
+        var groups = InvokeBuildExecutionGroupsForResults(loader, loadResults);
+
+        Assert.NotNull(groups);
+        Assert.Single(groups!);
+        Assert.Equal(["plugin-a", "plugin-b"], groups[0].Select(x => x.Descriptor.Id).ToArray());
+    }
+
+    [Fact]
+    public void BuildExecutionGroupsForResults_WithEmptyConfiguration_ReturnsNull()
+    {
+        using var loader = new PluginLoader();
+        SetLastConfig(loader, new PluginConfiguration { PluginsPath = "plugins" });
+
+        var groups = InvokeBuildExecutionGroupsForResults(loader, [new PluginLoadResult(CreateDescriptor("plugin-a"), new FakePlugin(), null)]);
+
+        Assert.Null(groups);
+    }
+
+    [Fact]
+    public async Task ExecutePluginsAndWaitAsync_WithConfiguredButEmptyGroups_FallsBackToFlatExecution()
+    {
+        using var loader = new PluginLoader();
+        var context = new PluginContext();
+        SetLastConfig(loader, new PluginConfiguration
+        {
+            PluginsPath = "plugins",
+            StageOrders =
+            [
+                new PluginStageOrderEntry
+                {
+                    Stage = PluginStage.Processing,
+                    PluginOrder =
+                    [
+                        new PluginOrderEntry { Id = "missing", Order = 1 },
+                    ]
+                }
+            ]
+        });
+
+        var loadResults = new List<PluginLoadResult>
+        {
+            new(CreateDescriptor("plugin-a"), new FakePlugin(), null),
+        };
+
+        var results = await loader.ExecutePluginsAndWaitAsync(loadResults, PluginStage.Processing, context);
+
+        Assert.Single(results);
+        Assert.True(results[0].Success);
+        Assert.Equal("plugin-a", results[0].Descriptor.Id);
+    }
+
+    [Fact]
+    public void ExecutePluginsAndWaitAsync_WithoutConfigurationGroups_ReturnsNullGroups()
+    {
+        using var loader = new PluginLoader();
+        var groups = InvokeBuildExecutionGroupsForResults(loader, [new PluginLoadResult(CreateDescriptor("plugin-a"), new FakePlugin(), null)]);
+        Assert.Null(groups);
+    }
+
+    [Fact]
+    public void ResolveStageMaxDegreeOfParallelism_ClampsToHardLimit()
+    {
+        using var loader = new PluginLoader();
+        SetLastConfig(loader, new PluginConfiguration
+        {
+            PluginsPath = "plugins",
+            StageOrders =
+            [
+                new PluginStageOrderEntry
+                {
+                    Stage = PluginStage.Processing,
+                    MaxDegreeOfParallelism = 999,
+                }
+            ]
+        });
+
+        var resolved = InvokeResolveStageMaxDegreeOfParallelism(loader, PluginStage.Processing);
+        Assert.NotNull(resolved);
+        Assert.InRange(resolved!.Value, 1, 32);
+    }
+
+    [Fact]
+    public void GetRuntime_UnsupportedIsolationMode_ThrowsInvalidOperationException()
+    {
+        using var loader = new PluginLoader();
+        var ex = Assert.Throws<TargetInvocationException>(() => InvokeGetRuntime(loader, (PluginIsolationMode)999));
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
+        Assert.Contains("対応するランタイムが見つかりません", ex.InnerException!.Message);
+    }
+
+    [Fact]
     public void PluginMetadata_DefaultIsolationMode_IsInProcess()
     {
         var attribute = new PluginAttribute("test-id", "Test", "1.0.0");
@@ -490,11 +650,46 @@ public sealed class PluginLoaderTests
 
         Assert.False(result.Success);
         Assert.NotNull(result.Error);
-        // PluginHost.exe が見つからない場合は FileNotFoundException、
-        // それ以外の場合は InvalidOperationException や TimeoutException
         Assert.True(
             result.Error is FileNotFoundException or InvalidOperationException or TimeoutException,
             $"予期しない例外型: {result.Error.GetType().Name}");
+    }
+
+    private static PluginDescriptor CreateDescriptor(string id)
+        => new(
+            id,
+            id,
+            new Version(1, 0, 0),
+            typeof(object).FullName!,
+            $"{id}.dll",
+            new[] { PluginStage.Processing }.ToFrozenSet());
+
+    private static void SetLastConfig(PluginLoader loader, PluginConfiguration config)
+    {
+        var field = typeof(PluginLoader).GetField("_lastConfig", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        field!.SetValue(loader, config);
+    }
+
+    private static IReadOnlyList<IReadOnlyList<PluginLoadResult>>? InvokeBuildExecutionGroupsForResults(PluginLoader loader, IReadOnlyList<PluginLoadResult> loadResults)
+    {
+        var method = typeof(PluginLoader).GetMethod("BuildExecutionGroupsForResults", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (IReadOnlyList<IReadOnlyList<PluginLoadResult>>?)method!.Invoke(loader, [loadResults]);
+    }
+
+    private static int? InvokeResolveStageMaxDegreeOfParallelism(PluginLoader loader, PluginStage stage)
+    {
+        var method = typeof(PluginLoader).GetMethod("ResolveStageMaxDegreeOfParallelism", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (int?)method!.Invoke(loader, [stage]);
+    }
+
+    private static object? InvokeGetRuntime(PluginLoader loader, PluginIsolationMode isolationMode)
+    {
+        var method = typeof(PluginLoader).GetMethod("GetRuntime", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return method!.Invoke(loader, [isolationMode]);
     }
 
     private sealed class TestEventTracker : IPluginLoaderCallback

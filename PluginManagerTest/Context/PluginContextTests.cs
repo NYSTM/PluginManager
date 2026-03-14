@@ -1,4 +1,6 @@
-﻿using PluginManager;
+﻿using System.Reflection;
+using System.Text.Json;
+using PluginManager;
 using Xunit;
 
 namespace PluginManagerTest;
@@ -395,6 +397,36 @@ public sealed class PluginContextTests
         Assert.Null(value);
     }
 
+    /// <summary>
+    /// TryGetProperty で null の Nullable 値型を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_NullNullableValueType_ReturnsTrue()
+    {
+        var context = new PluginContext();
+        context.SetProperty("nullable-int", null);
+
+        var result = context.TryGetProperty<int?>("nullable-int", out var value);
+
+        Assert.True(result);
+        Assert.Null(value);
+    }
+
+    /// <summary>
+    /// TryGetProperty で null 値を値型として取得した場合の失敗経路を確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_NullValueType_ReturnsFalse()
+    {
+        var context = new PluginContext();
+        context.SetProperty("count", null);
+
+        var result = context.TryGetProperty<int>("count", out var value);
+
+        Assert.False(result);
+        Assert.Equal(0, value);
+    }
+
     // ──────────────────────────────────────────────
     // GetPropertyOrDefault のテスト
     // ──────────────────────────────────────────────
@@ -516,5 +548,129 @@ public sealed class PluginContextTests
 
         // Assert
         Assert.Null(value);
+    }
+
+    /// <summary>
+    /// コンテキストキーを使用してプロパティを設定し、取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void SetProperty_WithContextKey_CanRetrieveByContextKey()
+    {
+        var context = new PluginContext();
+        var key = new ContextKey<int>("RequestCount");
+
+        context.SetProperty(key, 42);
+
+        Assert.Equal(42, context.GetProperty(key));
+    }
+
+    /// <summary>
+    /// コンテキストキーを使用した TryGetProperty で値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void TryGetProperty_WithContextKey_ReturnsTrueAndValue()
+    {
+        var context = new PluginContext();
+        var key = new ContextKey<string>("UserName");
+        context.SetProperty(key, "alice");
+
+        var result = context.TryGetProperty(key, out string? value);
+
+        Assert.True(result);
+        Assert.Equal("alice", value);
+    }
+
+    /// <summary>
+    /// コンテキストキーを使用した GetPropertyOrDefault でデフォルト値が返ることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrDefault_WithContextKey_ReturnsDefaultWhenMissing()
+    {
+        var context = new PluginContext();
+        var key = new ContextKey<int>("RetryCount");
+
+        var value = context.GetPropertyOrDefault(key, 5);
+
+        Assert.Equal(5, value);
+    }
+
+    /// <summary>
+    /// コンテキストキーを使用した GetPropertyOrThrow で値を取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetPropertyOrThrow_WithContextKey_ReturnsValue()
+    {
+        var context = new PluginContext();
+        var key = new ContextKey<string>("Tenant");
+        context.SetProperty(key, "A");
+
+        var value = context.GetPropertyOrThrow(key);
+
+        Assert.Equal("A", value);
+    }
+
+    /// <summary>
+    /// コンテキストキーを使用した RemoveProperty でエントリが削除できることを確認します。
+    /// </summary>
+    [Fact]
+    public void RemoveProperty_WithContextKey_RemovesEntry()
+    {
+        var context = new PluginContext();
+        var key = new ContextKey<string>("Tenant");
+        context.SetProperty(key, "A");
+
+        var result = context.RemoveProperty(key);
+
+        Assert.True(result);
+        Assert.False(context.Properties.ContainsKey("Tenant"));
+    }
+
+    /// <summary>
+    /// すべてのプロパティを取得できることを確認します。
+    /// </summary>
+    [Fact]
+    public void GetAllProperties_ReturnsAllEntries()
+    {
+        var context = new PluginContext();
+        context.SetProperty("Key1", "Value1");
+        context.SetProperty("Key2", 42);
+
+        var properties = context.GetAllProperties().ToDictionary(x => x.Key, x => x.Value);
+
+        Assert.Equal(2, properties.Count);
+        Assert.Equal("Value1", properties["Key1"]);
+        Assert.Equal(42, properties["Key2"]);
+    }
+
+    [Fact]
+    public void ApplyJsonDictionary_WithArrayAndObject_PreservesJsonElement()
+    {
+        var context = new PluginContext();
+        var data = new Dictionary<string, JsonElement>
+        {
+            ["array"] = JsonSerializer.SerializeToElement(new[] { 1, 2, 3 }),
+            ["object"] = JsonSerializer.SerializeToElement(new { Name = "Plugin" }),
+        };
+
+        context.ApplyJsonDictionary(data);
+
+        Assert.True(context.TryGetProperty<JsonElement>("array", out var array));
+        Assert.Equal(JsonValueKind.Array, array.ValueKind);
+        Assert.Equal(3, array.GetArrayLength());
+
+        Assert.True(context.TryGetProperty<JsonElement>("object", out var obj));
+        Assert.Equal(JsonValueKind.Object, obj.ValueKind);
+        Assert.Equal("Plugin", obj.GetProperty("Name").GetString());
+    }
+
+    [Fact]
+    public void DeserializeJsonElement_Undefined_ReturnsNull()
+    {
+        var method = typeof(PluginContext).GetMethod("DeserializeJsonElement", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var result = method!.Invoke(null, [default(JsonElement)]);
+
+        Assert.Null(result);
     }
 }

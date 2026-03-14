@@ -101,7 +101,9 @@ public sealed class CancellationTokenTests
             .Where(m => !m.IsSpecialName)  // プロパティ・イベントを除外
             .Where(m => m.Name != "Dispose" && m.Name != "DisposeAsync")  // Dispose メソッドを除外
             .Where(m => m.Name != "SetCallback")  // コールバック設定を除外
-            .Where(m => m.Name != "UnloadPlugin")  // Fire-and-forget の同期版を除外
+            .Where(m => m.Name != "SetExecutorCallback")
+            .Where(m => m.Name != "SetProcessCallback")
+            .Where(m => m.Name != "UnloadPlugin")  // Fire-and-forge の同期版を除外
             .Where(m => !m.GetParameters().Any(p => p.ParameterType == typeof(CancellationToken)))
             .ToList();
 
