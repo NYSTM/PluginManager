@@ -30,5 +30,5 @@ public sealed record PluginProcessNotification
     public string? ErrorMessage { get; init; }
 
     /// <summary>生成時刻（UTC）。</summary>
-    public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.Now;
 }
