@@ -10,6 +10,9 @@ namespace PluginManager.Ipc;
 /// </summary>
 internal sealed class PluginHostClient : IDisposable
 {
+    private const int HostProcessExitWaitMilliseconds = 5000;
+    private const int MaxUnexpectedReadCancellationRetries = 2;
+
     private readonly string _pipeName;
     private readonly Process? _hostProcess;
     private NamedPipeClientStream? _client;
@@ -53,17 +56,45 @@ internal sealed class PluginHostClient : IDisposable
             if (Volatile.Read(ref _disposed) == 1)
                 throw new ObjectDisposedException(nameof(PluginHostClient));
 
+            var client = _client;
+            if (client is null || !client.IsConnected)
+                throw new InvalidOperationException("ホストプロセスに接続されていません。");
+
             var requestJson = JsonSerializer.Serialize(request) + "\n";
             var requestBytes = Encoding.UTF8.GetBytes(requestJson);
-            await _client.WriteAsync(requestBytes, cancellationToken);
-            await _client.FlushAsync(cancellationToken);
+
+            try
+            {
+                await client.WriteAsync(requestBytes, cancellationToken);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new IOException("ホストプロセスへの要求送信中に接続が切断されました。");
+            }
 
             var buffer = new byte[65536];
             var messageBuilder = new StringBuilder();
+            var unexpectedReadCancellationCount = 0;
 
             while (true)
             {
-                var bytesRead = await _client.ReadAsync(buffer, cancellationToken);
+                int bytesRead;
+                try
+                {
+                    bytesRead = await client.ReadAsync(buffer, cancellationToken);
+                    unexpectedReadCancellationCount = 0;
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    if (unexpectedReadCancellationCount < MaxUnexpectedReadCancellationRetries && IsClientConnected(client))
+                    {
+                        unexpectedReadCancellationCount++;
+                        continue;
+                    }
+
+                    throw new IOException("ホストプロセスからの応答受信中に接続が切断されました。");
+                }
+
                 if (bytesRead == 0)
                     throw new IOException("ホストプロセスが切断されました。");
 
@@ -100,6 +131,18 @@ internal sealed class PluginHostClient : IDisposable
         }
     }
 
+    private static bool IsClientConnected(NamedPipeClientStream client)
+    {
+        try
+        {
+            return client.IsConnected;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
     public bool IsConnected => _client?.IsConnected ?? false;
 
     public void Dispose()
@@ -112,20 +155,70 @@ internal sealed class PluginHostClient : IDisposable
 
         if (_hostProcess is not null)
         {
+            var processId = TryGetProcessId(_hostProcess);
+
             try
             {
-                if (!_hostProcess.HasExited)
-                {
-                    _hostProcess.Kill();
-                    _hostProcess.WaitForExit(1000);
-                }
+                EnsureHostProcessExited(_hostProcess);
             }
             catch
             {
                 // プロセス終了失敗は無視
             }
+            finally
+            {
+                _hostProcess.Dispose();
+            }
 
-            _hostProcess.Dispose();
+            if (processId is int id)
+            {
+                try
+                {
+                    EnsureHostProcessExited(id);
+                }
+                catch
+                {
+                    // プロセス終了失敗は無視
+                }
+            }
+        }
+    }
+
+    private static int? TryGetProcessId(Process process)
+    {
+        try
+        {
+            return process.Id;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void EnsureHostProcessExited(Process process)
+    {
+        if (process.HasExited)
+            return;
+
+        process.Kill(entireProcessTree: true);
+        process.WaitForExit(HostProcessExitWaitMilliseconds);
+    }
+
+    private static void EnsureHostProcessExited(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
+                return;
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(HostProcessExitWaitMilliseconds);
+        }
+        catch (ArgumentException)
+        {
+            // 既に終了済み
         }
     }
 }

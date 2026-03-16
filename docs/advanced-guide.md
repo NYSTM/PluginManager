@@ -94,6 +94,32 @@
 - 例外・タイムアウト・キャンセルの発生箇所が見えにくくなる
 - 障害影響は分離しやすくなる
 
+### 3-8. `PluginHostShutdownTimeoutMilliseconds` の考え方
+
+`PluginHostShutdownTimeoutMilliseconds` は、`OutOfProcess` 実行時に `PluginHost` へ `Shutdown` を送ったあと、応答を待つ上限時間です。
+通常の `PluginLoader` 利用では最初に意識する項目ではなく、別プロセス運用で終了待機を調整したい場合だけ設定します。
+
+```json
+{
+  "PluginHostShutdownTimeoutMilliseconds": 3000
+}
+```
+
+この値の意味は次のとおりです。
+
+1. `Shutdown` を送る
+2. 指定ミリ秒だけ応答を待つ
+3. 間に合えば正常終了する
+4. 間に合わなければ切断し、必要に応じて強制終了へ進む
+
+設定を検討する場面:
+
+- `PluginHost` が重い終了処理を持つ
+- サービス停止時間の上限を短くしたい
+- テストや運用で終了待ち時間を明示的に管理したい
+
+通常は既定値のままで十分です。
+
 ## 4. ALC アンロードと解放確認
 
 ### 4-1. どういうときに必要か

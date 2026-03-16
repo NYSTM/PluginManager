@@ -1,4 +1,5 @@
-﻿using System.Runtime.Loader;
+﻿using System.Diagnostics;
+using System.Runtime.Loader;
 using Microsoft.Extensions.Logging;
 
 namespace PluginManager;
@@ -49,8 +50,7 @@ internal sealed class UnloadVerifier
         // Unload を呼び出し
         context.Unload();
 
-        // GC を複数回実行して回収を試みる
-        var startTime = DateTime.Now;
+        var stopwatch = Stopwatch.StartNew();
         var retryCount = 0;
         const int maxRetries = 10;
 
@@ -58,7 +58,7 @@ internal sealed class UnloadVerifier
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (DateTime.Now - startTime > timeout.Value)
+            if (HasTimedOut(stopwatch.Elapsed, timeout.Value))
             {
                 _logger?.LogWarning(
                     "アンロード検証タイムアウト: {ContextName} (試行回数: {RetryCount})",
@@ -87,11 +87,27 @@ internal sealed class UnloadVerifier
                     contextName,
                     retryCount);
 
-                // 短い遅延を入れて次のGCを待つ
-                await Task.Delay(TimeSpan.FromMilliseconds(100 * retryCount), cancellationToken);
+                var delay = TimeSpan.FromMilliseconds(100 * retryCount);
+                var remaining = timeout.Value - stopwatch.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    _logger?.LogWarning(
+                        "アンロード検証タイムアウト: {ContextName} (試行回数: {RetryCount})",
+                        contextName,
+                        retryCount);
+
+                    LogDiagnostics(contextName, weakRef);
+                    return false;
+                }
+
+                if (delay > remaining)
+                    delay = remaining;
+
+                await Task.Delay(delay, cancellationToken);
             }
         }
 
+        stopwatch.Stop();
         var isUnloaded = !weakRef.IsAlive;
 
         if (isUnloaded)
@@ -100,7 +116,7 @@ internal sealed class UnloadVerifier
                 "アンロード検証成功: {ContextName} (試行回数: {RetryCount}, 経過時間: {ElapsedMs}ms)",
                 contextName,
                 retryCount,
-                (DateTime.Now - startTime).TotalMilliseconds);
+                stopwatch.Elapsed.TotalMilliseconds);
         }
         else
         {
@@ -108,13 +124,16 @@ internal sealed class UnloadVerifier
                 "アンロード検証失敗: {ContextName} (試行回数: {RetryCount}, 経過時間: {ElapsedMs}ms)",
                 contextName,
                 retryCount,
-                (DateTime.Now - startTime).TotalMilliseconds);
+                stopwatch.Elapsed.TotalMilliseconds);
 
             LogDiagnostics(contextName, weakRef);
         }
 
         return isUnloaded;
     }
+
+    private static bool HasTimedOut(TimeSpan elapsed, TimeSpan timeout)
+        => elapsed >= timeout;
 
     /// <summary>
     /// 診断情報をログに記録します。

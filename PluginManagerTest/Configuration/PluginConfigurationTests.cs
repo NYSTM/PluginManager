@@ -15,12 +15,13 @@ public sealed class PluginConfigurationTests
     public void Load_ValidFile_ReturnsConfiguration()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "test-plugins",
           "IntervalMilliseconds": 300,
           "TimeoutMilliseconds": 4000,
+          "PluginHostShutdownTimeoutMilliseconds": 4500,
           "StageOrders": [
             {
               "Stage": "前処理",
@@ -50,6 +51,7 @@ public sealed class PluginConfigurationTests
             Assert.Equal(expectedPluginsPath, config.PluginsPath);
             Assert.Equal(300, config.IntervalMilliseconds);
             Assert.Equal(4000, config.TimeoutMilliseconds);
+            Assert.Equal(4500, config.PluginHostShutdownTimeoutMilliseconds);
             Assert.Equal(2, config.StageOrders.Count);
 
             var preOrder = config.GetPluginOrder(new PluginStage("前処理"));
@@ -99,7 +101,7 @@ public sealed class PluginConfigurationTests
     public void Load_MinimalConfiguration_UsesDefaultValues()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "plugins"
@@ -133,7 +135,7 @@ public sealed class PluginConfigurationTests
     public void Load_WithRetrySettings_ReturnsRetryConfiguration()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "plugins",
@@ -165,7 +167,7 @@ public sealed class PluginConfigurationTests
     public void Load_MinimalConfiguration_RetryCountDefaultsToZero()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, """{ "PluginsPath": "plugins" }""");
 
         try
@@ -187,7 +189,7 @@ public sealed class PluginConfigurationTests
     public void GetPluginOrder_UndefinedStage_ReturnsEmptyList()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "plugins",
@@ -220,7 +222,7 @@ public sealed class PluginConfigurationTests
     public void GetPluginOrder_CaseInsensitiveStageId_ReturnsOrder()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "plugins",
@@ -256,7 +258,7 @@ public sealed class PluginConfigurationTests
     public void Load_InvalidJson_ThrowsInvalidOperationException()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, "{ INVALID JSON }");
 
         try
@@ -276,7 +278,7 @@ public sealed class PluginConfigurationTests
     public void Load_NegativeIntervalMilliseconds_ThrowsInvalidOperationException()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, """
         {
           "PluginsPath": "plugins",
@@ -301,7 +303,7 @@ public sealed class PluginConfigurationTests
     [Fact]
     public void Load_NegativeTimeoutMilliseconds_ThrowsInvalidOperationException()
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, """
         {
           "PluginsPath": "plugins",
@@ -325,7 +327,7 @@ public sealed class PluginConfigurationTests
     [Fact]
     public void Load_NegativeRetryCount_ThrowsInvalidOperationException()
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, """
         {
           "PluginsPath": "plugins",
@@ -349,7 +351,7 @@ public sealed class PluginConfigurationTests
     [Fact]
     public void Load_NegativeRetryDelayMilliseconds_ThrowsInvalidOperationException()
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, """
         {
           "PluginsPath": "plugins",
@@ -368,12 +370,39 @@ public sealed class PluginConfigurationTests
     }
 
     /// <summary>
+    /// PluginHostShutdownTimeoutMilliseconds が無効な場合に例外が発生することを確認します。
+    /// </summary>
+    [Fact]
+    public void Load_InvalidPluginHostShutdownTimeout_ThrowsException()
+    {
+        var tempFile = CreateTempConfigPath();
+        var json = """
+        {
+          "PluginsPath": "test-plugins",
+          "PluginHostShutdownTimeoutMilliseconds": 0,
+          "StageOrders": []
+        }
+        """;
+        File.WriteAllText(tempFile, json);
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => PluginConfiguration.Load(tempFile));
+            Assert.Contains("PluginHostShutdownTimeoutMilliseconds", ex.Message);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    /// <summary>
     /// PluginOrder の Order が負値の場合に例外が発生することを確認します。
     /// </summary>
     [Fact]
     public void Load_NegativePluginOrder_ThrowsInvalidOperationException()
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         File.WriteAllText(tempFile, """
         {
           "PluginsPath": "plugins",
@@ -403,7 +432,7 @@ public sealed class PluginConfigurationTests
     public void Load_DuplicatePluginId_ThrowsInvalidOperationException()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "test-plugins",
@@ -441,7 +470,7 @@ public sealed class PluginConfigurationTests
     public void Load_SameIdInDifferentStages_Success()
     {
         // Arrange
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "test-plugins",
@@ -484,7 +513,7 @@ public sealed class PluginConfigurationTests
     [Fact]
     public void Load_WithStageMaxDegreeOfParallelism_ReturnsConfiguration()
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "plugins",
@@ -562,7 +591,7 @@ public sealed class PluginConfigurationTests
     [Fact]
     public void Load_InvalidStageMaxDegreeOfParallelism_ThrowsInvalidOperationException()
     {
-        var tempFile = Path.GetTempFileName();
+        var tempFile = CreateTempConfigPath();
         var json = """
         {
           "PluginsPath": "plugins",
@@ -588,4 +617,7 @@ public sealed class PluginConfigurationTests
             File.Delete(tempFile);
         }
     }
+
+    private static string CreateTempConfigPath()
+        => Path.Combine(Path.GetTempPath(), $"plugin-config-{Guid.NewGuid():N}.json");
 }

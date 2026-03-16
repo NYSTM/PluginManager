@@ -14,6 +14,7 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
     private readonly ConcurrentDictionary<string, OutOfProcessPluginProxy> _proxies = new(StringComparer.OrdinalIgnoreCase);
     private readonly PluginProcessNotificationPublisher? _processNotificationPublisher;
     private readonly SemaphoreSlim _createLock = new(1, 1);
+    private int _shutdownTimeoutMilliseconds = PluginHostShutdownHelper.DefaultShutdownTimeoutMilliseconds;
     private bool _disposed;
 
     public OutOfProcessPluginRuntime(PluginProcessNotificationPublisher? processNotificationPublisher = null)
@@ -22,6 +23,12 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
     }
 
     public PluginIsolationMode IsolationMode => PluginIsolationMode.OutOfProcess;
+
+    internal void SetShutdownTimeoutMilliseconds(int timeoutMilliseconds)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeoutMilliseconds, 0);
+        _shutdownTimeoutMilliseconds = timeoutMilliseconds;
+    }
 
     public async Task<PluginLoadResult> LoadAsync(
         PluginDescriptor descriptor,
@@ -121,20 +128,17 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
         {
             try
             {
-                var shutdownRequest = new PluginHostRequest
-                {
-                    RequestId = Guid.NewGuid().ToString("N"),
-                    Command = PluginHostCommand.Shutdown,
-                };
-                clientToDispose.SendRequestAsync(shutdownRequest, CancellationToken.None).GetAwaiter().GetResult();
-                PublishQueuedNotifications(notificationQueue);
+                PluginHostShutdownHelper.SendShutdown(clientToDispose, _shutdownTimeoutMilliseconds);
             }
             catch
             {
                 // シャットダウン失敗は無視
             }
-
-            clientToDispose.Dispose();
+            finally
+            {
+                PublishQueuedNotifications(notificationQueue);
+                clientToDispose.Dispose();
+            }
         }
 
         notificationQueue?.Dispose();
@@ -179,13 +183,7 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
         {
             try
             {
-                var shutdownRequest = new PluginHostRequest
-                {
-                    RequestId = Guid.NewGuid().ToString("N"),
-                    Command = PluginHostCommand.Shutdown,
-                };
-                await clientToDispose.SendRequestAsync(shutdownRequest, cancellationToken);
-                PublishQueuedNotifications(notificationQueue);
+                await PluginHostShutdownHelper.SendShutdownAsync(clientToDispose, cancellationToken, _shutdownTimeoutMilliseconds);
             }
             catch (OperationCanceledException)
             {
@@ -195,8 +193,11 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             {
                 // シャットダウン失敗は無視
             }
-
-            clientToDispose.Dispose();
+            finally
+            {
+                PublishQueuedNotifications(notificationQueue);
+                clientToDispose.Dispose();
+            }
         }
 
         notificationQueue?.Dispose();
@@ -214,12 +215,7 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
         {
             try
             {
-                var shutdownRequest = new PluginHostRequest
-                {
-                    RequestId = Guid.NewGuid().ToString("N"),
-                    Command = PluginHostCommand.Shutdown,
-                };
-                client.SendRequestAsync(shutdownRequest, CancellationToken.None).GetAwaiter().GetResult();
+                PluginHostShutdownHelper.SendShutdown(client, _shutdownTimeoutMilliseconds);
             }
             catch
             {
@@ -299,21 +295,30 @@ internal sealed class OutOfProcessPluginRuntime : IPluginRuntime, IDisposable
             }
             catch
             {
-                client?.Dispose();
                 notificationQueue.Dispose();
-                if (process is not null && !process.HasExited)
+
+                if (client is not null)
+                {
+                    client.Dispose();
+                }
+                else if (process is not null)
                 {
                     try
                     {
-                        process.Kill();
-                        process.WaitForExit(1000);
+                        if (!process.HasExited)
+                        {
+                            process.Kill();
+                            process.WaitForExit(1000);
+                        }
                     }
                     catch
                     {
                         // プロセス終了失敗は無視
                     }
+
+                    process.Dispose();
                 }
-                process?.Dispose();
+
                 throw;
             }
         }

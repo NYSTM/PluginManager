@@ -286,7 +286,7 @@ public sealed class PluginConfigurationLoaderTests
 
     private static string CreateTempConfig(string json)
     {
-        var path = Path.GetTempFileName();
+        var path = Path.Combine(Path.GetTempPath(), $"plugin-config-{Guid.NewGuid():N}.json");
         File.WriteAllText(path, json);
         return path;
     }

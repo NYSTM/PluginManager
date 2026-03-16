@@ -142,6 +142,9 @@
 同一ステージ内の同時実行上限を制御したい場合だけ指定してください。
 未指定時は既定の実行方式が使われ、指定時もホスト側の安全上限内で適用されます。
 
+`PluginHostShutdownTimeoutMilliseconds` は `OutOfProcess` 実行時だけ使う発展設定です。
+通常利用では最初に意識する必要はありません。必要になったときだけ `docs/advanced-guide.md` を参照してください.
+
 ### 4-3. `Order` の考え方
 
 - 同じ `Order` は並列実行

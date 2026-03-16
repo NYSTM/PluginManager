@@ -36,6 +36,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
     private readonly PluginLoaderNotificationPublisher _notificationPublisher;
     private readonly PluginExecutorNotificationPublisher _executorNotificationPublisher;
     private readonly PluginProcessNotificationPublisher _processNotificationPublisher;
+    private readonly OutOfProcessPluginRuntime _outOfProcessRuntime;
     private readonly IReadOnlyDictionary<PluginIsolationMode, IPluginRuntime> _runtimes;
     private bool _disposed;
     private PluginConfiguration? _lastConfig;
@@ -46,10 +47,11 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         _executorNotificationPublisher = new(logger);
         _processNotificationPublisher = new(logger);
         _discoverer = new(logger);
+        _outOfProcessRuntime = new(_processNotificationPublisher);
         _runtimes = new Dictionary<PluginIsolationMode, IPluginRuntime>
         {
             [PluginIsolationMode.InProcess] = new InProcessPluginRuntime(logger),
-            [PluginIsolationMode.OutOfProcess] = new OutOfProcessPluginRuntime(_processNotificationPublisher),
+            [PluginIsolationMode.OutOfProcess] = _outOfProcessRuntime,
         };
     }
 
@@ -115,6 +117,7 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
 
         var config = PluginConfigurationLoader.Load(configurationFilePath);
         _lastConfig = config;
+        _outOfProcessRuntime.SetShutdownTimeoutMilliseconds(config.PluginHostShutdownTimeoutMilliseconds);
 
         if (string.IsNullOrWhiteSpace(config.PluginsPath))
             return [];

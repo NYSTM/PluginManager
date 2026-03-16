@@ -15,6 +15,8 @@ namespace PluginManagerTest;
 /// </summary>
 public sealed class OutOfProcessPluginRuntimeTests
 {
+    private const int MaxUnexpectedReadCancellationRetries = 2;
+
     [Fact]
     public void PluginMetadata_OutOfProcessIsolationMode_IsConfigurable()
     {
@@ -434,9 +436,36 @@ public sealed class OutOfProcessPluginRuntimeTests
     private static async Task<PluginHostRequest> ReadRequestAsync(NamedPipeServerStream server)
     {
         using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
-        var line = await reader.ReadLineAsync();
-        Assert.False(string.IsNullOrWhiteSpace(line));
-        return JsonSerializer.Deserialize<PluginHostRequest>(line!)!;
+
+        for (var retryCount = 0; ; retryCount++)
+        {
+            try
+            {
+                var line = await reader.ReadLineAsync();
+                Assert.False(string.IsNullOrWhiteSpace(line));
+                return JsonSerializer.Deserialize<PluginHostRequest>(line!)!;
+            }
+            catch (OperationCanceledException) when (retryCount < MaxUnexpectedReadCancellationRetries && IsPipeConnected(server))
+            {
+                // 断続的な pipe 読み取りキャンセルは少回数だけ再試行する
+            }
+            catch (OperationCanceledException)
+            {
+                throw new IOException("要求受信中に名前付きパイプ接続が中断されました。");
+            }
+        }
+    }
+
+    private static bool IsPipeConnected(NamedPipeServerStream server)
+    {
+        try
+        {
+            return server.IsConnected;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
     }
 
     private static async Task WriteResponseAsync(NamedPipeServerStream server, PluginHostResponse response)

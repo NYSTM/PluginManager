@@ -12,6 +12,8 @@ namespace PluginManagerTest;
 /// </summary>
 public sealed class PluginHostClientTests
 {
+    private const int MaxUnexpectedReadCancellationRetries = 2;
+
     [Fact]
     public async Task ConnectAsync_WithoutServer_ThrowsTimeoutException()
     {
@@ -220,14 +222,42 @@ public sealed class PluginHostClientTests
 
         await server.WaitForConnectionAsync();
         await handler(server);
+        await Task.Delay(50);
     }
 
     private static async Task<PluginHostRequest> ReadRequestAsync(NamedPipeServerStream server)
     {
         using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
-        var line = await reader.ReadLineAsync();
-        Assert.False(string.IsNullOrWhiteSpace(line));
-        return JsonSerializer.Deserialize<PluginHostRequest>(line!)!;
+
+        for (var retryCount = 0; ; retryCount++)
+        {
+            try
+            {
+                var line = await reader.ReadLineAsync();
+                Assert.False(string.IsNullOrWhiteSpace(line));
+                return JsonSerializer.Deserialize<PluginHostRequest>(line!)!;
+            }
+            catch (OperationCanceledException) when (retryCount < MaxUnexpectedReadCancellationRetries && IsPipeConnected(server))
+            {
+                // 断続的な pipe 読み取りキャンセルは少回数だけ再試行する
+            }
+            catch (OperationCanceledException)
+            {
+                throw new IOException("要求受信中に名前付きパイプ接続が中断されました。");
+            }
+        }
+    }
+
+    private static bool IsPipeConnected(NamedPipeServerStream server)
+    {
+        try
+        {
+            return server.IsConnected;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
     }
 
     private static async Task WriteLinesAsync(NamedPipeServerStream server, params string[] lines)
@@ -239,5 +269,7 @@ public sealed class PluginHostClientTests
 
         foreach (var line in lines)
             await writer.WriteLineAsync(line);
+
+        server.WaitForPipeDrain();
     }
 }

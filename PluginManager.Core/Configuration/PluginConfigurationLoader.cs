@@ -55,6 +55,9 @@ public static class PluginConfigurationLoader
         if (configuration.RetryDelayMilliseconds < 0)
             throw new InvalidOperationException("RetryDelayMilliseconds は 0 以上で指定してください。");
 
+        if (configuration.PluginHostShutdownTimeoutMilliseconds <= 0)
+            throw new InvalidOperationException("PluginHostShutdownTimeoutMilliseconds は 1 以上で指定してください。");
+
         if (configuration.StageOrders is null)
             throw new InvalidOperationException("StageOrders は必須です。");
 

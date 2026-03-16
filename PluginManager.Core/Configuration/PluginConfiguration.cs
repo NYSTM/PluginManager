@@ -68,6 +68,11 @@ public sealed class PluginConfiguration
     public int RetryDelayMilliseconds { get; init; } = 500;
 
     /// <summary>
+    /// `PluginHost` の Shutdown 応答待ちタイムアウト時間（ミリ秒）を取得します。既定値は <c>3000</c>。
+    /// </summary>
+    public int PluginHostShutdownTimeoutMilliseconds { get; init; } = 3000;
+
+    /// <summary>
     /// 指定ステージの <see cref="PluginOrderEntry"/> 一覧を O(1) で取得します。
     /// </summary>
     /// <param name="stage">対象ステージ。</param>
@@ -96,13 +101,14 @@ public sealed class PluginConfiguration
 
         return new PluginConfiguration
         {
-            PluginsPath            = Path.GetFullPath(PluginsPath, basePath),
-            StageOrders            = StageOrders,
-            PluginDependencies     = PluginDependencies,
-            IntervalMilliseconds   = IntervalMilliseconds,
-            TimeoutMilliseconds    = TimeoutMilliseconds,
-            RetryCount             = RetryCount,
-            RetryDelayMilliseconds = RetryDelayMilliseconds,
+            PluginsPath                         = Path.GetFullPath(PluginsPath, basePath),
+            StageOrders                         = StageOrders,
+            PluginDependencies                  = PluginDependencies,
+            IntervalMilliseconds                = IntervalMilliseconds,
+            TimeoutMilliseconds                 = TimeoutMilliseconds,
+            RetryCount                          = RetryCount,
+            RetryDelayMilliseconds              = RetryDelayMilliseconds,
+            PluginHostShutdownTimeoutMilliseconds = PluginHostShutdownTimeoutMilliseconds,
         };
     }
 

@@ -12,6 +12,7 @@ namespace PluginManagerTest;
 /// </summary>
 public sealed class PipeServerTests
 {
+    private const int MaxUnexpectedReadCancellationRetries = 2;
     private static readonly UTF8Encoding _utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     [Fact]
@@ -54,7 +55,7 @@ public sealed class PipeServerTests
         };
 
         await writer.WriteLineAsync(JsonSerializer.Serialize(request));
-        var responseJson = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var responseJson = await ReadPipeLineAsync(reader, client).WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.NotNull(responseJson);
         var response = JsonSerializer.Deserialize<PluginHostResponse>(responseJson!);
@@ -96,7 +97,7 @@ public sealed class PipeServerTests
         };
 
         await writer.WriteLineAsync(JsonSerializer.Serialize(pingRequest));
-        var responseJson = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var responseJson = await ReadPipeLineAsync(reader, client).WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.NotNull(responseJson);
         var response = JsonSerializer.Deserialize<PluginHostResponse>(responseJson!);
@@ -136,7 +137,7 @@ public sealed class PipeServerTests
         };
 
         await writer.WriteLineAsync(JsonSerializer.Serialize(pingRequest));
-        var responseJson = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var responseJson = await ReadPipeLineAsync(reader, client).WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.NotNull(responseJson);
         var response = JsonSerializer.Deserialize<PluginHostResponse>(responseJson!);
@@ -146,5 +147,36 @@ public sealed class PipeServerTests
 
         cts.Cancel();
         await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private static async Task<string?> ReadPipeLineAsync(StreamReader reader, NamedPipeClientStream client)
+    {
+        for (var retryCount = 0; ; retryCount++)
+        {
+            try
+            {
+                return await reader.ReadLineAsync();
+            }
+            catch (OperationCanceledException) when (retryCount < MaxUnexpectedReadCancellationRetries && IsPipeConnected(client))
+            {
+                // 断続的な pipe 読み取りキャンセルは少回数だけ再試行する
+            }
+            catch (OperationCanceledException)
+            {
+                throw new IOException("応答受信中に名前付きパイプ接続が中断されました。");
+            }
+        }
+    }
+
+    private static bool IsPipeConnected(NamedPipeClientStream client)
+    {
+        try
+        {
+            return client.IsConnected;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
     }
 }
