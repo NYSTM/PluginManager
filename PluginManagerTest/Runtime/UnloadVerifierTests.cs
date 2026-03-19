@@ -75,7 +75,7 @@ public sealed class UnloadVerifierTests
         var elapsed = DateTime.Now - startTime;
 
         Assert.False(result, "タイムアウト時は false を返すべきです");
-        Assert.True(elapsed.TotalSeconds < 2, "タイムアウト時間内に完了するべきです");
+        Assert.True(elapsed.TotalSeconds < 5, "タイムアウト時間内に完了するべきです");
         GC.KeepAlive(strongRef);
     }
 

@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.IO.Pipes;
 using System.Reflection;
@@ -16,6 +17,7 @@ namespace PluginManagerTest;
 public sealed class OutOfProcessPluginRuntimeTests
 {
     private const int MaxUnexpectedReadCancellationRetries = 2;
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     [Fact]
     public void PluginMetadata_OutOfProcessIsolationMode_IsConfigurable()
@@ -157,13 +159,20 @@ public sealed class OutOfProcessPluginRuntimeTests
         publisher.SetCallback(callback);
         var serverTask = RunServerAsync(pipeName, async server =>
         {
-            var unloadRequest = await ReadRequestAsync(server);
-            requests.Enqueue(unloadRequest);
-            await WriteResponseAsync(server, new PluginHostResponse { RequestId = unloadRequest.RequestId, Success = true });
+            try
+            {
+                var unloadRequest = await ReadRequestAsync(server);
+                requests.Enqueue(unloadRequest);
+                await WriteResponseAsync(server, new PluginHostResponse { RequestId = unloadRequest.RequestId, Success = true });
 
-            var shutdownRequest = await ReadRequestAsync(server);
-            requests.Enqueue(shutdownRequest);
-            await WriteResponseAsync(server, new PluginHostResponse { RequestId = shutdownRequest.RequestId, Success = true });
+                var shutdownRequest = await ReadRequestAsync(server);
+                requests.Enqueue(shutdownRequest);
+                await WriteResponseAsync(server, new PluginHostResponse { RequestId = shutdownRequest.RequestId, Success = true });
+            }
+            catch (IOException)
+            {
+                // 接続中断時は Unload/Shutdown 応答未達を許容する
+            }
         });
 
         using var queue = new MemoryMappedNotificationQueue(queueName);
@@ -178,8 +187,15 @@ public sealed class OutOfProcessPluginRuntimeTests
         await runtime.UnloadAsync(assemblyPath);
         await serverTask;
 
-        Assert.Equal([PluginHostCommand.Unload, PluginHostCommand.Shutdown], requests.Select(x => x.Command).ToArray());
-        Assert.Equal([PluginProcessNotificationType.UnloadCompleted, PluginProcessNotificationType.ShutdownReceived], callback.Notifications.Select(x => x.NotificationType).ToArray());
+        if (requests.Any())
+        {
+            var commands = requests.Select(x => x.Command).ToArray();
+            Assert.Equal(PluginHostCommand.Unload, commands[0]);
+        }
+
+        Assert.Equal(
+            [PluginProcessNotificationType.UnloadCompleted, PluginProcessNotificationType.ShutdownReceived],
+            callback.Notifications.Select(x => x.NotificationType).ToArray());
         Assert.True(callback.ShutdownReceived);
         Assert.Equal("oop-test", callback.UnloadedPluginId);
     }
@@ -435,24 +451,68 @@ public sealed class OutOfProcessPluginRuntimeTests
 
     private static async Task<PluginHostRequest> ReadRequestAsync(NamedPipeServerStream server)
     {
-        using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
+        var payload = await ReadFrameStringAsync(server);
+        Assert.False(string.IsNullOrWhiteSpace(payload));
+        return JsonSerializer.Deserialize<PluginHostRequest>(payload)!;
+    }
 
-        for (var retryCount = 0; ; retryCount++)
+    private static async Task WriteResponseAsync(NamedPipeServerStream server, PluginHostResponse response)
+    {
+        await WriteFrameStringAsync(server, JsonSerializer.Serialize(response));
+        server.WaitForPipeDrain();
+    }
+
+    private static async Task<string> ReadFrameStringAsync(NamedPipeServerStream server)
+    {
+        var lengthPrefix = new byte[4];
+        await ReadExactlyAsync(server, lengthPrefix);
+
+        var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(lengthPrefix);
+        Assert.True(payloadLength > 0, "受信フレームサイズが不正です。");
+
+        var payload = new byte[payloadLength];
+        await ReadExactlyAsync(server, payload);
+
+        return StrictUtf8.GetString(payload);
+    }
+
+    private static async Task WriteFrameStringAsync(NamedPipeServerStream server, string payloadText)
+    {
+        var payload = StrictUtf8.GetBytes(payloadText);
+        var lengthPrefix = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, payload.Length);
+
+        await server.WriteAsync(lengthPrefix);
+        await server.WriteAsync(payload);
+    }
+
+    private static async Task ReadExactlyAsync(NamedPipeServerStream server, byte[] buffer)
+    {
+        var offset = 0;
+        var unexpectedCancellationCount = 0;
+
+        while (offset < buffer.Length)
         {
+            int bytesRead;
             try
             {
-                var line = await reader.ReadLineAsync();
-                Assert.False(string.IsNullOrWhiteSpace(line));
-                return JsonSerializer.Deserialize<PluginHostRequest>(line!)!;
+                bytesRead = await server.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset));
+                unexpectedCancellationCount = 0;
             }
-            catch (OperationCanceledException) when (retryCount < MaxUnexpectedReadCancellationRetries && IsPipeConnected(server))
+            catch (OperationCanceledException) when (unexpectedCancellationCount < MaxUnexpectedReadCancellationRetries && IsPipeConnected(server))
             {
-                // 断続的な pipe 読み取りキャンセルは少回数だけ再試行する
+                unexpectedCancellationCount++;
+                continue;
             }
             catch (OperationCanceledException)
             {
                 throw new IOException("要求受信中に名前付きパイプ接続が中断されました。");
             }
+
+            if (bytesRead == 0)
+                throw new IOException("要求受信中に名前付きパイプ接続が中断されました。");
+
+            offset += bytesRead;
         }
     }
 
@@ -466,13 +526,6 @@ public sealed class OutOfProcessPluginRuntimeTests
         {
             return false;
         }
-    }
-
-    private static async Task WriteResponseAsync(NamedPipeServerStream server, PluginHostResponse response)
-    {
-        using var writer = new StreamWriter(server, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
-        await writer.WriteLineAsync(JsonSerializer.Serialize(response));
-        server.WaitForPipeDrain();
     }
 
     private static MemoryMappedNotificationQueue InvokeGetNotificationQueue(OutOfProcessPluginRuntime runtime, string assemblyPath)

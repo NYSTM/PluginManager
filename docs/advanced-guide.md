@@ -120,6 +120,48 @@
 
 通常は既定値のままで十分です。
 
+### 3-9. Pipe 通信プロトコル（長さプレフィックス）
+
+`PluginManager` と `PluginHost` 間の IPC は、`JSONL`（改行区切り）ではなく **長さプレフィックス** 方式です。  
+フレームは次の形式で送受信します。
+
+- `int32 little-endian length`
+- `UTF-8 payload`（JSON）
+
+`length` は `payload` のバイト長を表し、ヘッダー 4 バイトは含みません。
+
+エンコーディング方針:
+
+- `payload` は UTF-8（BOM なし）を使用する
+- 不正な UTF-8 バイト列は置換せずエラー扱いにする
+
+payload の契約:
+
+- 要求: `PluginHostRequest`
+- 応答: `PluginHostResponse`
+
+上限値:
+
+- フレーム最大サイズ: `1,048,576 bytes`（`1024 * 1024`）
+- `length <= 0` または上限超過は不正フレームとして扱う
+
+エラー時方針:
+
+- 未キャンセル `OperationCanceledException` が送受信で発生した場合:
+  - 接続を不正状態とみなし即時破棄する
+  - 呼び出し元へ `IOException` を返す
+- 受信で `bytesRead == 0` の場合:
+  - 切断とみなし接続を破棄し、`IOException` を返す
+- 不正 UTF-8 / 不正フレーム長 / 不正 JSON の場合:
+  - 受信失敗として例外を返し、同一接続で継続しない
+- `RequestId` 不一致応答は読み飛ばすが、上限回数（10回）を超えたら:
+  - 接続を破棄し、`IOException` を返す
+
+運用上の注意:
+
+- 呼び出し元は `CancellationToken` でタイムアウトを明示する
+- 送受信エラー後は同一接続を再利用しない
+
 ## 4. ALC アンロードと解放確認
 
 ### 4-1. どういうときに必要か

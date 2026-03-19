@@ -38,7 +38,15 @@ public class PluginLoaderCallbackTests
         }
         finally
         {
-            File.Delete(tempFile);
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch (IOException)
+            {
+                // 一時ファイル削除失敗は無視
+            }
         }
     }
 
@@ -72,7 +80,15 @@ public class PluginLoaderCallbackTests
         }
         finally
         {
-            File.Delete(tempFile);
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch (IOException)
+            {
+                // 一時ファイル削除失敗は無視
+            }
         }
     }
 
@@ -104,7 +120,15 @@ public class PluginLoaderCallbackTests
         }
         finally
         {
-            File.Delete(tempFile);
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch (IOException)
+            {
+                // 一時ファイル削除失敗は無視
+            }
         }
     }
 
@@ -141,7 +165,15 @@ public class PluginLoaderCallbackTests
         }
         finally
         {
-            File.Delete(tempFile);
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch (IOException)
+            {
+                // 一時ファイル削除失敗は無視
+            }
         }
     }
 

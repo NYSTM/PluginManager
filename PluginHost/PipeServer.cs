@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -11,8 +12,10 @@ namespace PluginHost;
 /// </summary>
 internal sealed class PipeServer
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private const int MaxConcurrentClients = 4;
     private const int MaxConcurrentRequests = 8;
+    private const int MaxFramePayloadBytes = 1024 * 1024;
 
     private readonly string _pipeName;
     private readonly PluginRequestHandler _handler;
@@ -40,7 +43,7 @@ internal sealed class PipeServer
         for (var i = 0; i < MaxConcurrentClients; i++)
         {
             var index = i;
-            acceptTasks.Add(Task.Run(() => RunServerInstanceAsync(index, cancellationToken), cancellationToken));
+            acceptTasks.Add(Task.Run(() => RunServerInstanceAsync(index, cancellationToken), CancellationToken.None));
         }
 
         await Task.WhenAll(acceptTasks);
@@ -121,58 +124,35 @@ internal sealed class PipeServer
 
     private async Task ProcessRequestsAsync(NamedPipeServerStream server, int instanceIndex, CancellationToken cancellationToken)
     {
-        var buffer = new byte[65536];
-        var messageBuilder = new StringBuilder();
-
         while (server.IsConnected && !cancellationToken.IsCancellationRequested)
         {
             try
             {
-                var bytesRead = await server.ReadAsync(buffer, cancellationToken);
-                if (bytesRead == 0)
-                    break;
+                var requestBytes = await ReadFrameAsync(server, cancellationToken);
+                var requestJson = StrictUtf8.GetString(requestBytes);
+                var request = JsonSerializer.Deserialize<PluginHostRequest>(requestJson);
+                if (request is null)
+                    continue;
 
-                messageBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
-
-                while (true)
+                var handlerTask = Task.Run(async () =>
                 {
-                    var accumulated = messageBuilder.ToString();
-                    var newlineIndex = accumulated.IndexOf('\n');
-
-                    if (newlineIndex < 0)
-                        break;
-
-                    var message = accumulated[..newlineIndex];
-                    messageBuilder.Remove(0, newlineIndex + 1);
-
-                    if (string.IsNullOrWhiteSpace(message))
-                        continue;
-
-                    var request = JsonSerializer.Deserialize<PluginHostRequest>(message);
-                    if (request is null)
-                        continue;
-
-                    var handlerTask = Task.Run(async () =>
+                    await _requestSemaphore.WaitAsync(cancellationToken);
+                    try
                     {
-                        await _requestSemaphore.WaitAsync(cancellationToken);
-                        try
-                        {
-                            return await _handler.HandleAsync(request, instanceIndex, cancellationToken);
-                        }
-                        finally
-                        {
-                            _requestSemaphore.Release();
-                        }
-                    }, cancellationToken);
+                        return await _handler.HandleAsync(request, instanceIndex, cancellationToken);
+                    }
+                    finally
+                    {
+                        _requestSemaphore.Release();
+                    }
+                }, cancellationToken);
 
-                    var response = await handlerTask;
-                    var responseBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response) + "\n");
-                    await server.WriteAsync(responseBytes, cancellationToken);
-                    await server.FlushAsync(cancellationToken);
+                var response = await handlerTask;
+                var responseBytes = StrictUtf8.GetBytes(JsonSerializer.Serialize(response));
+                await WriteFrameAsync(server, responseBytes, cancellationToken);
 
-                    if (request.Command == PluginHostCommand.Shutdown)
-                        return;
-                }
+                if (request.Command == PluginHostCommand.Shutdown)
+                    return;
             }
             catch (OperationCanceledException)
             {
@@ -186,6 +166,46 @@ internal sealed class PipeServer
                     errorType: ex.GetType().Name,
                     errorMessage: ex.Message);
             }
+        }
+    }
+
+    private static async Task WriteFrameAsync(NamedPipeServerStream server, byte[] payload, CancellationToken cancellationToken)
+    {
+        if (payload.Length > MaxFramePayloadBytes)
+            throw new InvalidOperationException($"応答フレームサイズが上限を超えています。Size={payload.Length}");
+
+        var frame = new byte[sizeof(int) + payload.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(frame.AsSpan(0, sizeof(int)), payload.Length);
+        payload.CopyTo(frame.AsSpan(sizeof(int)));
+
+        await server.WriteAsync(frame, cancellationToken);
+        await server.FlushAsync(cancellationToken);
+    }
+
+    private static async Task<byte[]> ReadFrameAsync(NamedPipeServerStream server, CancellationToken cancellationToken)
+    {
+        var lengthPrefix = new byte[4];
+        await ReadExactlyAsync(server, lengthPrefix, cancellationToken);
+
+        var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(lengthPrefix);
+        if (payloadLength <= 0 || payloadLength > MaxFramePayloadBytes)
+            throw new InvalidOperationException($"要求フレームサイズが不正です。Size={payloadLength}");
+
+        var payload = new byte[payloadLength];
+        await ReadExactlyAsync(server, payload, cancellationToken);
+        return payload;
+    }
+
+    private static async Task ReadExactlyAsync(NamedPipeServerStream server, byte[] buffer, CancellationToken cancellationToken)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var bytesRead = await server.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), cancellationToken);
+            if (bytesRead == 0)
+                throw new IOException("クライアント接続が切断されました。");
+
+            offset += bytesRead;
         }
     }
 

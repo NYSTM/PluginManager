@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -10,8 +11,10 @@ namespace PluginManager.Ipc;
 /// </summary>
 internal sealed class PluginHostClient : IDisposable
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private const int HostProcessExitWaitMilliseconds = 5000;
-    private const int MaxUnexpectedReadCancellationRetries = 2;
+    private const int MaxRequestIdMismatchCount = 10;
+    private const int MaxFramePayloadBytes = 1024 * 1024;
 
     private readonly string _pipeName;
     private readonly Process? _hostProcess;
@@ -60,69 +63,33 @@ internal sealed class PluginHostClient : IDisposable
             if (client is null || !client.IsConnected)
                 throw new InvalidOperationException("ホストプロセスに接続されていません。");
 
-            var requestJson = JsonSerializer.Serialize(request) + "\n";
-            var requestBytes = Encoding.UTF8.GetBytes(requestJson);
+            var requestJson = JsonSerializer.Serialize(request);
+            var requestBytes = StrictUtf8.GetBytes(requestJson);
+            await WriteFrameAsync(client, requestBytes, cancellationToken);
 
-            try
-            {
-                await client.WriteAsync(requestBytes, cancellationToken);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new IOException("ホストプロセスへの要求送信中に接続が切断されました。");
-            }
-
-            var buffer = new byte[65536];
-            var messageBuilder = new StringBuilder();
-            var unexpectedReadCancellationCount = 0;
+            var mismatchCount = 0;
 
             while (true)
             {
-                int bytesRead;
-                try
+                var responseBytes = await ReadFrameAsync(client, cancellationToken);
+                var responseJson = StrictUtf8.GetString(responseBytes);
+
+                var response = JsonSerializer.Deserialize<PluginHostResponse>(responseJson);
+                if (response is null)
+                    throw new InvalidOperationException("ホストプロセスからの応答が不正です。");
+
+                if (response.RequestId != request.RequestId)
                 {
-                    bytesRead = await client.ReadAsync(buffer, cancellationToken);
-                    unexpectedReadCancellationCount = 0;
-                }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                {
-                    if (unexpectedReadCancellationCount < MaxUnexpectedReadCancellationRetries && IsClientConnected(client))
+                    if (++mismatchCount > MaxRequestIdMismatchCount)
                     {
-                        unexpectedReadCancellationCount++;
-                        continue;
+                        InvalidateConnection(client);
+                        throw new IOException($"ホストプロセスからの応答リクエストIDが一致しません。(期待値: {request.RequestId}, 実際値: {response.RequestId})");
                     }
 
-                    throw new IOException("ホストプロセスからの応答受信中に接続が切断されました。");
+                    continue;
                 }
 
-                if (bytesRead == 0)
-                    throw new IOException("ホストプロセスが切断されました。");
-
-                messageBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
-
-                while (true)
-                {
-                    var accumulated = messageBuilder.ToString();
-                    var newlineIndex = accumulated.IndexOf('\n');
-
-                    if (newlineIndex < 0)
-                        break;
-
-                    var message = accumulated[..newlineIndex];
-                    messageBuilder.Remove(0, newlineIndex + 1);
-
-                    if (string.IsNullOrWhiteSpace(message))
-                        continue;
-
-                    var response = JsonSerializer.Deserialize<PluginHostResponse>(message);
-                    if (response is null)
-                        throw new InvalidOperationException("ホストプロセスからの応答が不正です。");
-
-                    if (response.RequestId != request.RequestId)
-                        continue;
-
-                    return response;
-                }
+                return response;
             }
         }
         finally
@@ -131,16 +98,83 @@ internal sealed class PluginHostClient : IDisposable
         }
     }
 
-    private static bool IsClientConnected(NamedPipeClientStream client)
+    private async Task WriteFrameAsync(NamedPipeClientStream client, byte[] payload, CancellationToken cancellationToken)
+    {
+        if (payload.Length > MaxFramePayloadBytes)
+            throw new InvalidOperationException($"送信フレームサイズが上限を超えています。Size={payload.Length}");
+
+        var frame = new byte[sizeof(int) + payload.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(frame.AsSpan(0, sizeof(int)), payload.Length);
+        payload.CopyTo(frame.AsSpan(sizeof(int)));
+
+        try
+        {
+            await client.WriteAsync(frame, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            InvalidateConnection(client);
+            throw new IOException("ホストプロセスへの要求送信中に接続が切断されました。");
+        }
+    }
+
+    private async Task<byte[]> ReadFrameAsync(NamedPipeClientStream client, CancellationToken cancellationToken)
+    {
+        var lengthPrefix = new byte[4];
+        await ReadExactlyAsync(client, lengthPrefix, cancellationToken, "ホストプロセスからの応答受信中に接続が切断されました。");
+
+        var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(lengthPrefix);
+        if (payloadLength <= 0 || payloadLength > MaxFramePayloadBytes)
+        {
+            InvalidateConnection(client);
+            throw new InvalidOperationException($"ホストプロセスからの応答フレームサイズが不正です。Size={payloadLength}");
+        }
+
+        var payload = new byte[payloadLength];
+        await ReadExactlyAsync(client, payload, cancellationToken, "ホストプロセスからの応答受信中に接続が切断されました。");
+
+        return payload;
+    }
+
+    private async Task ReadExactlyAsync(NamedPipeClientStream client, byte[] buffer, CancellationToken cancellationToken, string disconnectionMessage)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            int bytesRead;
+            try
+            {
+                bytesRead = await client.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), cancellationToken);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                InvalidateConnection(client);
+                throw new IOException(disconnectionMessage);
+            }
+
+            if (bytesRead == 0)
+            {
+                InvalidateConnection(client);
+                throw new IOException("ホストプロセスが切断されました。");
+            }
+
+            offset += bytesRead;
+        }
+    }
+
+    private void InvalidateConnection(NamedPipeClientStream client)
     {
         try
         {
-            return client.IsConnected;
+            client.Dispose();
         }
-        catch (ObjectDisposedException)
+        catch
         {
-            return false;
+            // 接続破棄失敗は無視
         }
+
+        if (ReferenceEquals(_client, client))
+            _client = null;
     }
 
     public bool IsConnected => _client?.IsConnected ?? false;

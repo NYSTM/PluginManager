@@ -651,7 +651,7 @@ public sealed class PluginLoaderTests
         Assert.False(result.Success);
         Assert.NotNull(result.Error);
         Assert.True(
-            result.Error is FileNotFoundException or InvalidOperationException or TimeoutException,
+            result.Error is FileNotFoundException or InvalidOperationException or TimeoutException or IOException,
             $"予期しない例外型: {result.Error.GetType().Name}");
     }
 
