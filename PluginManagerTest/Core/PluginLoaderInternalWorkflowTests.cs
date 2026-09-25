@@ -25,6 +25,24 @@ public sealed class PluginLoaderInternalWorkflowTests
     }
 
     [Fact]
+    public async Task LoadPluginWithTimeoutAsync_WhenPluginHasCustomStage_UsesPluginMetadata()
+    {
+        using var loader = new PluginLoader();
+        var descriptor = CreateDescriptor(typeof(WorkflowCustomStagePlugin));
+
+        var result = await InvokeLoadPluginWithTimeoutAsync(loader, descriptor, new PluginContext(), timeoutMilliseconds: 0, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Instance);
+        Assert.Equal(WorkflowCustomStagePlugin.ExpectedId, result.Descriptor.Id);
+        Assert.Equal(WorkflowCustomStagePlugin.ExpectedName, result.Descriptor.Name);
+        Assert.Equal(WorkflowCustomStagePlugin.ExpectedVersion, result.Descriptor.Version);
+        Assert.Equal(
+            WorkflowCustomStagePlugin.ExpectedStage,
+            Assert.Single(result.Descriptor.SupportedStages));
+    }
+
+    [Fact]
     public async Task LoadPluginWithTimeoutAsync_WhenPluginTimesOut_ReturnsTimeoutException()
     {
         using var loader = new PluginLoader();
@@ -224,6 +242,21 @@ public sealed class PluginLoaderInternalWorkflowTests
         public IReadOnlySet<PluginStage> SupportedStages { get; } = new[] { PluginStage.Processing }.ToFrozenSet();
         public Task InitializeAsync(PluginContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<object?> ExecuteAsync(PluginStage stage, PluginContext context, CancellationToken cancellationToken = default) => Task.FromResult<object?>("ok");
+    }
+
+    private sealed class WorkflowCustomStagePlugin : IPlugin
+    {
+        public static readonly string ExpectedId = "workflow-custom-stage-id";
+        public static readonly string ExpectedName = "ワークフロー独自ステージ";
+        public static readonly Version ExpectedVersion = new(2, 3, 4);
+        public static readonly PluginStage ExpectedStage = PluginStageRegistry.RegisterOrGet("WorkflowCustomStage");
+
+        public string Id => ExpectedId;
+        public string Name => ExpectedName;
+        public Version Version => ExpectedVersion;
+        public IReadOnlySet<PluginStage> SupportedStages { get; } = new[] { ExpectedStage }.ToFrozenSet();
+        public Task InitializeAsync(PluginContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<object?> ExecuteAsync(PluginStage stage, PluginContext context, CancellationToken cancellationToken = default) => Task.FromResult<object?>("custom-stage");
     }
 
     private sealed class WorkflowSlowPlugin : IPlugin

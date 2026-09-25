@@ -268,7 +268,23 @@ public sealed class PluginLoader : IDisposable, IAsyncDisposable
         try
         {
             var runtime = GetRuntime(descriptor.IsolationMode);
-            return await runtime.LoadAsync(descriptor, context, cancellationToken);
+            PluginLoadResult result = await runtime.LoadAsync(descriptor, context, cancellationToken);
+            if (!result.Success || result.Instance is null)
+                return result;
+
+            // 不具合対策: 探索時のDescriptorは属性または標準ステージから生成されるため、
+            // PluginBaseのコンストラクターで独自ステージを宣言したPluginでは、
+            // 実装のSupportedStagesとDescriptorのSupportedStagesが不一致になる。
+            // 不一致のままではExecutorが独自ステージのPluginを対象外としてスキップするため、
+            // ロード済み実体のメタデータでDescriptorを補正する。
+            PluginDescriptor actualDescriptor = result.Descriptor with
+            {
+                Id = result.Instance.Id,
+                Name = result.Instance.Name,
+                Version = result.Instance.Version,
+                SupportedStages = result.Instance.SupportedStages
+            };
+            return new PluginLoadResult(actualDescriptor, result.Instance);
         }
         catch (Exception ex)
         {
